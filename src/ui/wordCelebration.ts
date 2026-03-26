@@ -202,3 +202,34 @@ export function playResetCelebration(
     container.innerHTML = ''
   }, 3200)
 }
+
+export function playInfoCelebration(
+  container: HTMLElement | null,
+  title: string,
+  subtitle = '',
+  clearMs = 1700,
+): void {
+  if (!container) return
+  container.innerHTML = ''
+
+  const stack = document.createElement('div')
+  stack.className = 'word-cele-stack'
+
+  const headline = document.createElement('div')
+  headline.className = 'reset-cele-title'
+  headline.textContent = title
+  stack.appendChild(headline)
+
+  if (subtitle.trim().length > 0) {
+    const sub = document.createElement('div')
+    sub.className = 'reset-cele-subtitle'
+    sub.textContent = subtitle
+    stack.appendChild(sub)
+  }
+
+  container.appendChild(stack)
+
+  window.setTimeout(() => {
+    container.innerHTML = ''
+  }, clearMs)
+}

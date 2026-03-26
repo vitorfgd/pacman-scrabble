@@ -361,6 +361,16 @@ canvas {
   font-variant-numeric: tabular-nums;
 }
 
+.score-speed {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+  color: #8dd3ff;
+  text-shadow: 0 0 12px rgba(141, 211, 255, 0.45);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Top-right HUD panel ────────────────────────────────────────────────── */
 
 #hud {
@@ -417,6 +427,15 @@ canvas {
 
 .hud-button:hover {
   background: rgba(255, 255, 255, 0.13);
+}
+
+.hud-button-danger {
+  border-color: rgba(255, 120, 120, 0.5);
+  color: #ffd4d4;
+}
+
+.hud-button-danger:hover {
+  background: rgba(255, 80, 80, 0.18);
 }
 
 .power-mode {
@@ -617,7 +636,7 @@ canvas {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 18px;
   width: min(96vw, 560px);
   text-align: center;
 }
@@ -632,6 +651,10 @@ canvas {
     0 4px 0 rgba(120, 60, 0, 0.35);
   animation: word-praise-burst 1.35s ease-out forwards;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  min-height: 1.65em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .word-praise-quest {
@@ -659,6 +682,7 @@ canvas {
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px 14px;
+  margin-top: 8px;
 }
 
 .word-cele-cell {

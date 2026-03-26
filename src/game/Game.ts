@@ -8,7 +8,7 @@ import { WordSource, anagramSignature } from './WordSource'
 import { WordValidator } from './WordValidator'
 import { getLetterScore, isVowelLetter } from './LetterScoring'
 import { Hud } from '../ui/hud'
-import { playResetCelebration, playWordCelebration } from '../ui/wordCelebration'
+import { playInfoCelebration, playResetCelebration, playWordCelebration } from '../ui/wordCelebration'
 
 export type GameOptions = { container: HTMLElement }
 
@@ -116,11 +116,14 @@ export class Game {
   private powerModeActive = false
 
   private resetting = false
+  private paused = false
+  private pauseStartedMs = 0
   private wordCelebrationEl: HTMLDivElement | null = null
 
   // Player velocity — sampled each frame for interceptor enemy AI.
   private readonly playerPrevPos = new THREE.Vector2(0, 0)
   private readonly playerVelocity = new THREE.Vector2(0, 0)
+  private speedHudSmoothed = 0
 
   // Word-completion shockwave ring.
   private shockwaveMesh: THREE.Mesh | null = null
@@ -206,6 +209,8 @@ export class Game {
     window.addEventListener('keydown', (ev: KeyboardEvent) => {
       if (ev.code === 'Space') { ev.preventDefault(); void this.tryCompleteWord() }
       if (ev.code === 'KeyR') this.resetTray()
+      if (ev.code === 'KeyP') this.togglePause()
+      if (ev.code === 'KeyH') this.hardResetGame()
     })
   }
 
@@ -237,6 +242,9 @@ export class Game {
     try {
       this.hud = new Hud()
       this.hud.setOnResetTray(() => this.resetTray())
+      this.hud.setOnPauseToggle(() => this.togglePause())
+      this.hud.setOnHardReset(() => this.hardResetGame())
+      this.hud.setPauseButtonState(false)
 
       // Cache DOM refs
       this.trayEl = document.getElementById('tray') as HTMLDivElement | null
@@ -267,6 +275,7 @@ export class Game {
 
       this.score = 0
       this.hud.setScore(0)
+      this.hud.setSpeed(0)
       this.gameStartMs = performance.now()
       this.enemyGlobalRamp = 1
 
@@ -345,6 +354,7 @@ export class Game {
   }
 
   private update(deltaSeconds: number, nowMs: number) {
+    if (this.paused) return
     if (!this.resetting && this.gameStartMs > 0) {
       const t = (nowMs - this.gameStartMs) / 1000
       this.enemyGlobalRamp = Math.min(this.enemyRampMax, 1 + t * this.enemyRampPerSecond)
@@ -361,6 +371,10 @@ export class Game {
       (pp.y - this.playerPrevPos.y) / Math.max(0.001, deltaSeconds),
     )
     this.playerPrevPos.set(pp.x, pp.y)
+    const speedNow = this.playerVelocity.length()
+    const alpha = 1 - Math.exp(-8 * deltaSeconds)
+    this.speedHudSmoothed = THREE.MathUtils.lerp(this.speedHudSmoothed, speedNow, alpha)
+    this.hud?.setSpeed(this.speedHudSmoothed)
 
     // Move HTML tray to follow player on screen
     this.updateTrayPosition()
@@ -463,7 +477,7 @@ export class Game {
       const dx = playerPos.x - letter.sprite.position.x
       const dy = playerPos.y - letter.sprite.position.y
       const r = playerRadius + letter.radius
-      if (dx * dx + dy * dy <= r * r) {
+      if (dx * dx + dy * dy <= r * r * 0.85) {
         this.tray.push(letter.char)
         letter.setActive(false)
         this.wordScrambler.spawnReplacementLetter()
@@ -480,10 +494,23 @@ export class Game {
 
   private async tryCompleteWord() {
     if (!this.wordValidator || this.wordCompletionInFlight || !this.tray.length) return
-    if (this.tray.length !== this.currentQuestLength) return
+    if (this.paused) return
+    if (this.tray.length < this.currentQuestLength) return
     const joined = this.tray.join('').toLowerCase()
-    if (!this.wordValidator.isValidMultiset(joined)) return
+    if (!this.wordValidator.isValidMultiset(joined)) {
+      this.handleInvalidSubmission()
+      return
+    }
     await this.completeWord(joined)
+  }
+
+  private handleInvalidSubmission(): void {
+    if (!this.wordScrambler) return
+    const returned = [...this.tray]
+    this.tray = []
+    this.updateTrayContent()
+    if (returned.length > 0) this.wordScrambler.spawnLettersFromTray(returned)
+    playInfoCelebration(this.wordCelebrationEl, 'NOT A WORD', 'Tray reset. No points lost.', 1600)
   }
 
   private getQuestMultiplier(): number {
@@ -593,9 +620,8 @@ export class Game {
         this.enemySpeedScales[i] = 1.05 + Math.random() * 0.9
         enemy.setActive(false, tmpOff, 10)
       } else {
-        // Outside power mode enemies always deal damage — size doesn't help.
-        this.player.setSize(pr - enemy.getRadius() * 0.22)
-        if (this.player.getRadius() <= 10) { this.requestReset(); return }
+        this.requestReset()
+        return
       }
     }
   }
@@ -628,7 +654,7 @@ export class Game {
     playResetCelebration(
       this.wordCelebrationEl,
       'OUCH! RESET!',
-      `Quest target: ${this.currentQuestLength}-letter word. Spell to grow.`,
+      `Quest target: at least ${this.currentQuestLength} letters. Spell to grow.`,
     )
     this.tray = []
     this.updateTrayContent()
@@ -642,6 +668,8 @@ export class Game {
 
     this.score = 0
     this.hud?.setScore(0)
+    this.speedHudSmoothed = 0
+    this.hud?.setSpeed(0)
     this.resetQuestState()
     this.updateQuestHud()
     this.gameStartMs = performance.now()
@@ -663,8 +691,32 @@ export class Game {
 
     this.hud.setQuestPanel({
       targetLength: this.currentQuestLength,
-      subtitle: `Spell a valid ${this.currentQuestLength}-letter word. Press Space to submit.`,
+      subtitle: `Spell a valid word with at least ${this.currentQuestLength} letters. Press Space to submit.`,
     })
+  }
+
+  private togglePause(): void {
+    this.paused = !this.paused
+    this.hud?.setPauseButtonState(this.paused)
+
+    if (this.paused) {
+      this.pauseStartedMs = performance.now()
+      playInfoCelebration(this.wordCelebrationEl, 'PAUSED', 'Press P or click Resume', 1200)
+      return
+    }
+
+    const now = performance.now()
+    const pausedFor = Math.max(0, now - this.pauseStartedMs)
+    this.lastMs = now
+    this.gameStartMs += pausedFor
+    this.fruitNextSpawnMs += pausedFor
+    this.powerModeUntilMs += pausedFor
+  }
+
+  private hardResetGame(): void {
+    if (this.paused) this.togglePause()
+    this.requestReset()
+    playInfoCelebration(this.wordCelebrationEl, 'HARD RESET', 'Everything restarted.', 1700)
   }
 
   // ── Word shockwave ────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@
       <div id="scoreDisplay">
         <div class="score-label">SCORE</div>
         <div id="score" class="score-value">0</div>
+        <div id="speed" class="score-speed">SPEED 0</div>
       </div>
 
       <!-- Top-right HUD: quest multiplier + reset button + power mode -->
@@ -29,6 +30,10 @@
         </div>
         <div class="hud-row">
           <button id="resetTray" class="hud-button" type="button">Reset Tray (R)</button>
+          <button id="pauseGame" class="hud-button" type="button">Pause (P)</button>
+        </div>
+        <div class="hud-row">
+          <button id="hardResetGame" class="hud-button hud-button-danger" type="button">Hard Reset (H)</button>
         </div>
         <div class="hud-row hud-muted">
           <span id="powerMode" class="power-mode"></span>
