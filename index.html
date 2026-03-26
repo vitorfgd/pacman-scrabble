@@ -11,32 +11,34 @@
       <!-- Three.js canvas -->
       <div id="game"></div>
 
-      <!-- Score — top center, large and prominent -->
-      <div id="scoreDisplay">
-        <div class="score-label">SCORE</div>
-        <div id="score" class="score-value">0</div>
-        <div id="speed" class="score-speed">SPEED 0</div>
-      </div>
+      <!-- HUD -->
+      <div id="hudCorner" aria-label="Game HUD">
+        <!-- Points -->
+        <div id="scoreDisplay">
+          <div class="score-label">SCORE</div>
+          <div id="score" class="score-value">0</div>
+        </div>
 
-      <!-- Top-right HUD: quest multiplier + reset button + power mode -->
-      <div id="hud">
-        <div class="hud-row">
-          <span class="hud-label">Quest multiplier</span>
-          <span id="questMult" class="wod"></span>
+        <!-- Quest / Word of the Day -->
+        <div id="hudInfo">
+          <div class="hud-row">
+            <span class="hud-label">Quest multiplier</span>
+            <span id="questMult" class="wod"></span>
+          </div>
+          <div class="hud-row">
+            <span class="hud-label">Word of the Day</span>
+            <span id="wod" class="wod"></span>
+          </div>
+          <div class="hud-row hud-muted">
+            <span id="powerMode" class="power-mode"></span>
+          </div>
         </div>
-        <div class="hud-row">
-          <span class="hud-label">Word of the Day</span>
-          <span id="wod" class="wod"></span>
-        </div>
-        <div class="hud-row">
+
+        <!-- Actions (stacked vertically) -->
+        <div id="hudActions" aria-label="Game actions">
           <button id="resetTray" class="hud-button" type="button">Reset Tray (R)</button>
           <button id="pauseGame" class="hud-button" type="button">Pause (P)</button>
-        </div>
-        <div class="hud-row">
           <button id="hardResetGame" class="hud-button hud-button-danger" type="button">Hard Reset (H)</button>
-        </div>
-        <div class="hud-row hud-muted">
-          <span id="powerMode" class="power-mode"></span>
         </div>
       </div>
 

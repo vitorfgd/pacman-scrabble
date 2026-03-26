@@ -13,6 +13,18 @@ import { playInfoCelebration, playResetCelebration, playWordCelebration } from '
 export type GameOptions = { container: HTMLElement }
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
+type ThemeMode = 'dark' | 'light'
+type ViewportProfile = {
+  cameraViewHeightWorld: number
+  playerSize: number
+  letterRadius: number
+  starterScale: number
+  starterSpacing: number
+  enemyCount: number
+  enemyBaseRadiusScale: number
+  enemyMinSpawnDist: number
+  enemyMaxSpawnDist: number
+}
 
 const QUEST_SCHEDULE = [
   { length: 3, count: 2 },
@@ -20,7 +32,7 @@ const QUEST_SCHEDULE = [
   { length: 5, count: 1 },
 ] as const
 
-function createGridTexture(gridSizePx = 512, lineEveryPx = 64): THREE.Texture {
+function createGridTexture(gridSizePx = 512, lineEveryPx = 64, themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
   canvas.width = gridSizePx
   canvas.height = gridSizePx
@@ -28,10 +40,14 @@ function createGridTexture(gridSizePx = 512, lineEveryPx = 64): THREE.Texture {
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Failed to create canvas context for grid')
 
-  ctx.fillStyle = '#0d0d16'
+  if (themeMode === 'dark') {
+    ctx.fillStyle = '#0d0d16'
+  } else {
+    ctx.fillStyle = '#eef2ff'
+  }
   ctx.fillRect(0, 0, gridSizePx, gridSizePx)
 
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+  ctx.strokeStyle = themeMode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(27,31,48,0.06)'
   ctx.lineWidth = 1
 
   for (let x = 0; x <= gridSizePx; x += lineEveryPx) {
@@ -123,7 +139,6 @@ export class Game {
   // Player velocity — sampled each frame for interceptor enemy AI.
   private readonly playerPrevPos = new THREE.Vector2(0, 0)
   private readonly playerVelocity = new THREE.Vector2(0, 0)
-  private speedHudSmoothed = 0
 
   // Word-completion shockwave ring.
   private shockwaveMesh: THREE.Mesh | null = null
@@ -134,9 +149,10 @@ export class Game {
 
   private running = false
   private lastMs = 0
-  private readonly initialPlayerSize = 28
-  private readonly cameraViewHeightWorld = 1380
+  private initialPlayerSize = 28
+  private cameraViewHeightWorld = 1380
   private readonly cameraFollowSpeed = 4.5
+  private viewportProfile: ViewportProfile = this.computeViewportProfile()
 
   constructor(options: GameOptions) {
     this.container = options.container
@@ -160,7 +176,8 @@ export class Game {
     dir.position.set(0.3, 0.4, 1)
     this.scene.add(dir)
 
-    const gridTex = createGridTexture(512, 64)
+    const themeMode: ThemeMode = 'dark'
+    const gridTex = createGridTexture(512, 64, themeMode)
     const gridMat = new THREE.MeshStandardMaterial({ map: gridTex, roughness: 1, metalness: 0 })
     gridTex.repeat.set(8, 8)
     this.gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(this.mapSize, this.mapSize), gridMat)
@@ -190,6 +207,7 @@ export class Game {
     this.recomputeBounds()
     this.setupInput()
     this.onResize()
+
   }
 
   private recomputeBounds() {
@@ -198,13 +216,21 @@ export class Game {
   }
 
   private setupInput() {
-    this.renderer.domElement.addEventListener('pointermove', (ev: PointerEvent) => {
+    const updatePointer = (clientX: number, clientY: number) => {
       const rect = this.renderer.domElement.getBoundingClientRect()
       this.pointerNdc.set(
-        ((ev.clientX - rect.left) / rect.width) * 2 - 1,
-        -(((ev.clientY - rect.top) / rect.height) * 2 - 1),
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -(((clientY - rect.top) / rect.height) * 2 - 1),
       )
+    }
+
+    this.renderer.domElement.addEventListener('pointermove', (ev: PointerEvent) => {
+      updatePointer(ev.clientX, ev.clientY)
     })
+    window.addEventListener('pointermove', (ev: PointerEvent) => {
+      if (!this.isPortraitMode()) return
+      updatePointer(ev.clientX, ev.clientY)
+    }, { passive: true })
 
     window.addEventListener('keydown', (ev: KeyboardEvent) => {
       if (ev.code === 'Space') { ev.preventDefault(); void this.tryCompleteWord() }
@@ -218,6 +244,8 @@ export class Game {
     const w = this.container.clientWidth
     const h = this.container.clientHeight
     if (w <= 0 || h <= 0) return
+    this.viewportProfile = this.computeViewportProfile()
+    this.cameraViewHeightWorld = this.viewportProfile.cameraViewHeightWorld
     this.renderer.setSize(w, h, false)
     const aspect = w / h
     const halfY = this.cameraViewHeightWorld / 2
@@ -227,6 +255,49 @@ export class Game {
     this.camera.top = halfY
     this.camera.bottom = -halfY
     this.camera.updateProjectionMatrix()
+    this.applyViewportProfileRuntime()
+  }
+
+  private isPortraitMode(): boolean {
+    const forced = document.documentElement.dataset.orientation
+    if (forced === 'portrait') return true
+    if (forced === 'landscape') return false
+    return this.container.clientHeight > this.container.clientWidth
+  }
+
+  private computeViewportProfile(): ViewportProfile {
+    const portrait = this.isPortraitMode()
+    if (!portrait) {
+      return {
+        cameraViewHeightWorld: 1380,
+        playerSize: 28,
+        letterRadius: 42,
+        starterScale: 58,
+        starterSpacing: 92,
+        enemyCount: 22,
+        enemyBaseRadiusScale: 1,
+        enemyMinSpawnDist: 1180,
+        enemyMaxSpawnDist: Math.min(2600, this.mapSize / 2 - 80),
+      }
+    }
+    return {
+      cameraViewHeightWorld: 1700,
+      playerSize: 34,
+      letterRadius: 56,
+      starterScale: 72,
+      starterSpacing: 104,
+      enemyCount: 18,
+      enemyBaseRadiusScale: 0.92,
+      enemyMinSpawnDist: 1320,
+      enemyMaxSpawnDist: Math.min(2550, this.mapSize / 2 - 80),
+    }
+  }
+
+  private applyViewportProfileRuntime(): void {
+    this.initialPlayerSize = this.viewportProfile.playerSize
+    if (this.player.getRadius() <= this.initialPlayerSize + 0.01) {
+      this.player.setSize(this.initialPlayerSize)
+    }
   }
 
   start() {
@@ -264,8 +335,11 @@ export class Game {
       this.wordScrambler = new WordScrambler({
         scene: this.scene,
         bounds: this.bounds,
-        letterRadius: 42,
+        letterRadius: this.viewportProfile.letterRadius,
         maxLetters: 300,
+        starterScale: this.viewportProfile.starterScale,
+        starterSpacing: this.viewportProfile.starterSpacing,
+        themeMode: 'dark',
       })
       this.wordScrambler.initRandomFill(3)
       const starterWord = this.wordSource.getWordByLength(3)
@@ -275,7 +349,6 @@ export class Game {
 
       this.score = 0
       this.hud.setScore(0)
-      this.hud.setSpeed(0)
       this.gameStartMs = performance.now()
       this.enemyGlobalRamp = 1
 
@@ -309,14 +382,14 @@ export class Game {
   }
 
   private spawnInitialEnemies() {
-    const count = 22
+    const count = this.viewportProfile.enemyCount
     const tmp = new THREE.Vector2()
     // Keep spawns outside this ring so the player can grab the starter word first.
-    const minSpawnDist = 1180
-    const maxSpawnDist = Math.min(2600, this.mapSize / 2 - 80)
+    const minSpawnDist = this.viewportProfile.enemyMinSpawnDist
+    const maxSpawnDist = this.viewportProfile.enemyMaxSpawnDist
     for (const e of this.enemyPool) e.setActive(false, tmp, 10)
     for (let i = 0; i < count; i++) {
-      const r = 18 + Math.random() * 20
+      const r = (18 + Math.random() * 20) * this.viewportProfile.enemyBaseRadiusScale
       const margin = r * 2
       let placed = false
       for (let attempt = 0; attempt < 55; attempt++) {
@@ -371,10 +444,6 @@ export class Game {
       (pp.y - this.playerPrevPos.y) / Math.max(0.001, deltaSeconds),
     )
     this.playerPrevPos.set(pp.x, pp.y)
-    const speedNow = this.playerVelocity.length()
-    const alpha = 1 - Math.exp(-8 * deltaSeconds)
-    this.speedHudSmoothed = THREE.MathUtils.lerp(this.speedHudSmoothed, speedNow, alpha)
-    this.hud?.setSpeed(this.speedHudSmoothed)
 
     // Move HTML tray to follow player on screen
     this.updateTrayPosition()
@@ -668,8 +737,6 @@ export class Game {
 
     this.score = 0
     this.hud?.setScore(0)
-    this.speedHudSmoothed = 0
-    this.hud?.setSpeed(0)
     this.resetQuestState()
     this.updateQuestHud()
     this.gameStartMs = performance.now()

@@ -3,6 +3,7 @@ import { Letter } from './entities/Letter'
 import { isVowelLetter } from './LetterScoring'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
+type ThemeMode = 'dark' | 'light'
 
 function shuffleInPlace<T>(arr: T[]): void {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -18,7 +19,7 @@ function pickWeightedLetter(): string {
   return FREQ_CHARS[Math.floor(Math.random() * FREQ_CHARS.length)] ?? 'e'
 }
 
-function makeLetterTexture(char: string): THREE.Texture {
+function makeLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
   canvas.width = 192
   canvas.height = 192
@@ -27,24 +28,32 @@ function makeLetterTexture(char: string): THREE.Texture {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+  const isDark = themeMode === 'dark'
+
+  const baseFill = isDark ? 'rgba(8, 8, 18, 0.55)' : 'rgba(122, 54, 221, 0.10)'
+  const baseStroke = isDark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(122, 54, 221, 0.22)'
+  const shadowColor = isDark ? 'rgba(0,0,0,0.35)' : 'rgba(122, 54, 221, 0.25)'
+  const letterFill = isDark ? 'rgba(255,255,255,0.98)' : 'rgba(27, 31, 48, 0.96)'
+  const letterStroke = isDark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.7)'
+
   ctx.beginPath()
   ctx.arc(96, 96, 76, 0, Math.PI * 2)
-  ctx.fillStyle = 'rgba(8, 8, 18, 0.55)'
+  ctx.fillStyle = baseFill
   ctx.fill()
   ctx.lineWidth = 6
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)'
+  ctx.strokeStyle = baseStroke
   ctx.stroke()
 
-  ctx.shadowColor = 'rgba(0,0,0,0.35)'
+  ctx.shadowColor = shadowColor
   ctx.shadowBlur = 10
-  ctx.fillStyle = 'rgba(255,255,255,0.98)'
+  ctx.fillStyle = letterFill
   ctx.font = 'bold 128px system-ui, Segoe UI, Roboto, sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(char.toUpperCase(), 96, 104)
 
   ctx.shadowBlur = 0
-  ctx.strokeStyle = 'rgba(0,0,0,0.45)'
+  ctx.strokeStyle = letterStroke
   ctx.lineWidth = 12
   ctx.strokeText(char.toUpperCase(), 96, 104)
 
@@ -65,9 +74,12 @@ export class WordScrambler {
 
   private readonly letterRadius: number
   private maxLetters = 300
+  private starterScale = 58
+  private starterSpacing = 92
 
   private readonly letters: Letter[] = []
   private readonly textureByChar = new Map<string, THREE.Texture>()
+  private themeMode: ThemeMode = 'dark'
 
   // Starter-letter tracking — using a Set so there is zero ambiguity about
   // which pool slots are "reserved" for the intro word.
@@ -83,11 +95,17 @@ export class WordScrambler {
     bounds: Bounds
     letterRadius?: number
     maxLetters?: number
+    starterScale?: number
+    starterSpacing?: number
+    themeMode?: ThemeMode
   }) {
     this.scene = options.scene
     this.bounds = options.bounds
     this.letterRadius = options.letterRadius ?? 26
     if (options.maxLetters != null) this.maxLetters = options.maxLetters
+    if (options.starterScale != null) this.starterScale = options.starterScale
+    if (options.starterSpacing != null) this.starterSpacing = options.starterSpacing
+    if (options.themeMode != null) this.themeMode = options.themeMode
     this.buildPool()
   }
 
@@ -112,9 +130,22 @@ export class WordScrambler {
   private getLetterTexture(char: string): THREE.Texture {
     const existing = this.textureByChar.get(char)
     if (existing) return existing
-    const tex = makeLetterTexture(char)
+    const tex = makeLetterTexture(char, this.themeMode)
     this.textureByChar.set(char, tex)
     return tex
+  }
+
+  setThemeMode(themeMode: ThemeMode): void {
+    if (this.themeMode === themeMode) return
+    this.themeMode = themeMode
+    // Textures are theme-specific, so clear the cache and refresh active sprites.
+    this.textureByChar.clear()
+    for (const l of this.letters) {
+      if (!l.isActive()) continue
+      const mat = l.sprite.material as THREE.SpriteMaterial
+      mat.map = this.getLetterTexture(l.char)
+      mat.needsUpdate = true
+    }
   }
 
   private clearLetters() {
@@ -246,8 +277,8 @@ export class WordScrambler {
     this.starterAnimData.clear()
 
     const chars = word.toLowerCase().split('')
-    const starterScale = 58
-    const spacing = 92
+    const starterScale = this.starterScale
+    const spacing = this.starterSpacing
     const totalWidth = (chars.length - 1) * spacing
     const by = center.y + 210
 

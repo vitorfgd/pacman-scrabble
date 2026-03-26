@@ -13,7 +13,6 @@ export class Hud {
   private readonly pauseButtonEl: HTMLButtonElement
   private readonly hardResetButtonEl: HTMLButtonElement
   private readonly scoreEl: HTMLElement
-  private readonly speedEl: HTMLElement
 
   constructor() {
     const questMultEl = document.getElementById('questMult')
@@ -24,7 +23,6 @@ export class Hud {
     const pauseButtonEl = document.getElementById('pauseGame') as HTMLButtonElement | null
     const hardResetButtonEl = document.getElementById('hardResetGame') as HTMLButtonElement | null
     const scoreEl = document.getElementById('score')
-    const speedEl = document.getElementById('speed')
 
     if (!questMultEl) throw new Error('Missing #questMult element')
     if (!wodEl) throw new Error('Missing #wod element')
@@ -34,7 +32,6 @@ export class Hud {
     if (!pauseButtonEl) throw new Error('Missing #pauseGame button element')
     if (!hardResetButtonEl) throw new Error('Missing #hardResetGame button element')
     if (!scoreEl) throw new Error('Missing #score element')
-    if (!speedEl) throw new Error('Missing #speed element')
 
     this.questMultEl = questMultEl
     this.wodEl = wodEl
@@ -44,15 +41,10 @@ export class Hud {
     this.pauseButtonEl = pauseButtonEl
     this.hardResetButtonEl = hardResetButtonEl
     this.scoreEl = scoreEl
-    this.speedEl = speedEl
   }
 
   setScore(score: number): void {
     this.scoreEl.textContent = score.toLocaleString()
-  }
-
-  setSpeed(speed: number): void {
-    this.speedEl.textContent = `SPEED ${Math.round(speed).toLocaleString()}`
   }
 
   setQuestMultiplier(mult: number): void {
