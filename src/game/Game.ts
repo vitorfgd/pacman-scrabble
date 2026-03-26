@@ -4,8 +4,9 @@ import { Enemy } from './entities/Enemy'
 import type { EnemyRole } from './entities/Enemy'
 import { Fruit } from './entities/Fruit'
 import { WordScrambler } from './WordScrambler'
-import { WordSource } from './WordSource'
+import { WordSource, anagramSignature } from './WordSource'
 import { WordValidator } from './WordValidator'
+import { getLetterScore, isVowelLetter } from './LetterScoring'
 import { Hud } from '../ui/hud'
 import { playResetCelebration, playWordCelebration } from '../ui/wordCelebration'
 
@@ -79,6 +80,9 @@ export class Game {
   private wordSource: WordSource | null = null
   private wordScrambler: WordScrambler | null = null
   private wordValidator: WordValidator | null = null
+
+  private wordOfDayByLength: Record<number, string> = { 3: '', 4: '', 5: '' }
+  private currentWordOfDay = ''
 
   private questScheduleIndex = 0
   private questInPhaseDone = 0
@@ -240,6 +244,11 @@ export class Game {
 
       this.wordSource = new WordSource({ topWordCount: 1000 })
       this.wordValidator = new WordValidator()
+      this.wordOfDayByLength = {
+        3: this.wordSource.getWordOfDay(3, 3),
+        4: this.wordSource.getWordOfDay(4, 4),
+        5: this.wordSource.getWordOfDay(5, 5),
+      }
       this.hud.setPowerMode(false)
 
       // Tips removed for now.
@@ -423,7 +432,7 @@ export class Game {
     this.trayEl.innerHTML = ''
     for (const ch of this.tray) {
       const span = document.createElement('span')
-      span.className = 'tray-letter'
+      span.className = `tray-letter ${isVowelLetter(ch) ? 'tray-vowel' : 'tray-consonant'}`
       span.textContent = ch.toUpperCase()
       this.trayEl.appendChild(span)
     }
@@ -513,9 +522,25 @@ export class Game {
     this.wordCompletionInFlight = true
     try {
       const questMult = this.getQuestMultiplier()
-      let grow = word.length * 0.28 * questMult
-      let pts = Math.round(word.length * 50 * questMult)
-      const pointsPerLetter = Math.max(1, Math.round(pts / word.length))
+      const letters = word.toLowerCase().split('')
+
+      const perLetterPoints = letters.map((ch) => getLetterScore(ch))
+      const basePoints = perLetterPoints.reduce((a, b) => a + b, 0)
+
+      let pts = Math.round(basePoints * questMult)
+      let grow = pts * 0.006
+
+      const wodWord = this.currentWordOfDay
+      const isWordOfDay =
+        wodWord.length > 0 && anagramSignature(word) === anagramSignature(wodWord)
+
+      if (isWordOfDay) {
+        // Massive bonus for the daily target.
+        pts = Math.round(pts * 8 + 600)
+        grow = grow * 1.25 + 8
+        this.player.setWordOfDayGlow(true, performance.now())
+      }
+
       this.player.setSize(this.player.getRadius() + grow)
       this.score += pts
       this.hud?.setScore(this.score)
@@ -523,10 +548,12 @@ export class Game {
       this.advanceQuestAfterCompletion()
       this.updateQuestHud()
       playWordCelebration(this.wordCelebrationEl, {
-        letters: word.toLowerCase().split(''),
-        pointsPerLetter,
+        letters,
+        pointsPerLetter: Math.max(1, Math.round(pts / Math.max(1, letters.length))),
+        perLetterPoints,
         totalPoints: pts,
         questComplete: true,
+        wordOfDayComplete: isWordOfDay,
       })
 
       this.tray = []
@@ -629,6 +656,11 @@ export class Game {
   private updateQuestHud() {
     if (!this.hud) return
     this.hud.setQuestMultiplier(this.getQuestMultiplier())
+
+    // Word of the day is length-specific so the bonus is always achievable.
+    this.currentWordOfDay = this.wordOfDayByLength[this.currentQuestLength] ?? ''
+    if (this.currentWordOfDay) this.hud.setWordOfDay(this.currentWordOfDay)
+
     this.hud.setQuestPanel({
       targetLength: this.currentQuestLength,
       subtitle: `Spell a valid ${this.currentQuestLength}-letter word. Press Space to submit.`,

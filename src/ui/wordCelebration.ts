@@ -42,8 +42,10 @@ const CONFETTI_COLORS = [
 export type WordCelebrationDetails = {
   letters: string[]
   pointsPerLetter: number
+  perLetterPoints?: number[]
   totalPoints: number
   questComplete?: boolean
+  wordOfDayComplete?: boolean
 }
 
 /**
@@ -57,9 +59,10 @@ export function playWordCelebration(
   container.innerHTML = ''
 
   const questMode = details?.questComplete === true
-  const count = questMode ? 110 : 56
-  const durScale = questMode ? 1.45 : 1
-  const clearMs = questMode ? 5200 : 3800
+  const wodMode = details?.wordOfDayComplete === true
+  const count = wodMode ? 180 : questMode ? 110 : 56
+  const durScale = wodMode ? 1.65 : questMode ? 1.45 : 1
+  const clearMs = wodMode ? 6400 : questMode ? 5200 : 3800
 
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div')
@@ -105,16 +108,19 @@ export function playWordCelebration(
   stack.className = 'word-cele-stack'
 
   const praise = document.createElement('div')
-  praise.className = questMode ? 'word-praise word-praise-quest' : 'word-praise'
-  praise.textContent = questMode
-    ? PRAISE_QUEST[Math.floor(Math.random() * PRAISE_QUEST.length)]
-    : PRAISE[Math.floor(Math.random() * PRAISE.length)]
+  praise.className = wodMode ? 'word-praise word-praise-wod' : questMode ? 'word-praise word-praise-quest' : 'word-praise'
+  praise.textContent = wodMode
+    ? 'WORD OF THE DAY!'
+    : questMode
+      ? PRAISE_QUEST[Math.floor(Math.random() * PRAISE_QUEST.length)]
+      : PRAISE[Math.floor(Math.random() * PRAISE.length)]
   stack.appendChild(praise)
 
   if (details && details.letters.length > 0) {
     const row = document.createElement('div')
     row.className = 'word-cele-letters'
-    for (const ch of details.letters) {
+    for (let i = 0; i < details.letters.length; i++) {
+      const ch = details.letters[i] ?? ''
       const cell = document.createElement('div')
       cell.className = 'word-cele-cell'
       const L = document.createElement('span')
@@ -122,7 +128,8 @@ export function playWordCelebration(
       L.textContent = ch.toUpperCase()
       const pts = document.createElement('span')
       pts.className = 'word-cele-pt'
-      pts.textContent = `+${details.pointsPerLetter}`
+      const v = details.perLetterPoints?.[i]
+      pts.textContent = `+${v ?? details.pointsPerLetter}`
       cell.appendChild(L)
       cell.appendChild(pts)
       row.appendChild(cell)
@@ -131,8 +138,11 @@ export function playWordCelebration(
 
     const total = document.createElement('div')
     total.className = 'word-cele-total'
-    const bonus = questMode ? ' · Quest multiplier' : ''
-    total.textContent = `TOTAL +${details.totalPoints}${bonus}`
+    const bonuses = [
+      wodMode ? ' · WORD OF THE DAY' : '',
+      !wodMode && questMode ? ' · Quest' : '',
+    ].filter(Boolean)
+    total.textContent = `TOTAL +${details.totalPoints}${bonuses.length ? bonuses.join('') : ''}`
     stack.appendChild(total)
   }
 

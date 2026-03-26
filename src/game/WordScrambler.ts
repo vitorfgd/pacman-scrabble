@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { Letter } from './entities/Letter'
+import { isVowelLetter } from './LetterScoring'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
 
@@ -140,7 +141,8 @@ export class WordScrambler {
     const tex = this.getLetterTexture(ch)
     const mat = letter.sprite.material as THREE.SpriteMaterial
     mat.map = tex
-    mat.color.set(0xffffff)
+    const vowel = isVowelLetter(ch)
+    mat.color.set(vowel ? 0x6bcb77 : 0xc084fc)
     mat.needsUpdate = true
     mat.depthTest = false
     mat.depthWrite = false
@@ -271,9 +273,11 @@ export class WordScrambler {
       if (!letter.isActive()) continue
       const data = this.starterAnimData.get(letter)
       if (!data) continue
-      const hue = (t * 0.55 + data.phaseOffset) % 1
       const mat = letter.sprite.material as THREE.SpriteMaterial
-      mat.color.setHSL(hue, 1.0, 0.62)
+      const vowel = isVowelLetter(letter.char)
+      const hue = vowel ? 0.33 : 0.79
+      const pulse = 0.55 + 0.15 * Math.sin(t * 3.0 + data.phaseOffset * Math.PI * 2)
+      mat.color.setHSL(hue, 1.0, pulse)
       const bobY = Math.sin(t * 3.0 + data.phaseOffset * Math.PI * 2) * 10
       letter.sprite.position.set(data.baseX, data.baseY + bobY, 2)
     }

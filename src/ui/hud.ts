@@ -6,6 +6,7 @@ export type QuestHudState = {
 
 export class Hud {
   private readonly questMultEl: HTMLElement
+  private readonly wodEl: HTMLElement
   private readonly powerModeEl: HTMLElement
   private readonly questPanelEl: HTMLElement
   private readonly resetButtonEl: HTMLButtonElement
@@ -13,18 +14,21 @@ export class Hud {
 
   constructor() {
     const questMultEl = document.getElementById('questMult')
+    const wodEl = document.getElementById('wod')
     const powerModeEl = document.getElementById('powerMode')
     const questPanelEl = document.getElementById('questPanel')
     const resetButtonEl = document.getElementById('resetTray') as HTMLButtonElement | null
     const scoreEl = document.getElementById('score')
 
     if (!questMultEl) throw new Error('Missing #questMult element')
+    if (!wodEl) throw new Error('Missing #wod element')
     if (!powerModeEl) throw new Error('Missing #powerMode element')
     if (!questPanelEl) throw new Error('Missing #questPanel element')
     if (!resetButtonEl) throw new Error('Missing #resetTray button element')
     if (!scoreEl) throw new Error('Missing #score element')
 
     this.questMultEl = questMultEl
+    this.wodEl = wodEl
     this.powerModeEl = powerModeEl
     this.questPanelEl = questPanelEl
     this.resetButtonEl = resetButtonEl
@@ -37,6 +41,10 @@ export class Hud {
 
   setQuestMultiplier(mult: number): void {
     this.questMultEl.textContent = `${mult.toFixed(2)}×`
+  }
+
+  setWordOfDay(word: string): void {
+    this.wodEl.textContent = word.toUpperCase()
   }
 
   setQuestPanel(state: QuestHudState): void {
