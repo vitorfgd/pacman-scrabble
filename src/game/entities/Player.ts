@@ -1,23 +1,28 @@
 import * as THREE from 'three'
+import { PLAYER_GRID_CELL_TWEEN_MS, type Cell, type Dir, Grid } from '../Grid'
 
-export type PlayerUpdateContext = {
-  pointerWorld: THREE.Vector2
-  bounds: { minX: number; maxX: number; minY: number; maxY: number }
-}
-
-// Circle dot controlled by the pointer (Agar.io style).
 export class Player {
   readonly mesh: THREE.Mesh
   private size: number
-  private readonly baseMoveLerpFactor: number
-  private readonly baseMoveSpeedWorldPerSec: number
   private readonly initialSize: number
 
   // For Word-of-the-Day glow.
   private wodGlowActive = false
   private wodGlowStartMs = 0
 
-  constructor() {
+  private readonly grid: Grid
+  private cell: Cell
+  private desiredDir: Dir = { x: 0, y: 0 }
+  private lastMoveDir: Dir = { x: 0, y: 0 }
+
+  private tweening = false
+  private tweenProgress = 0
+  private toCell: Cell | null = null
+  private readonly fromWorld = new THREE.Vector2()
+  private readonly toWorld = new THREE.Vector2()
+  private speedMultiplier = 1
+
+  constructor(grid: Grid) {
     const geometry = new THREE.CircleGeometry(1, 48)
     const material = new THREE.MeshStandardMaterial({
       color: 0x33a1ff,
@@ -32,17 +37,36 @@ export class Player {
     this.size = this.initialSize
     this.mesh.scale.setScalar(this.size)
 
-    // Movement tuning:
-    // - baseMoveLerpFactor controls "slugishness" (how quickly it approaches the pointer)
-    // - baseMoveSpeedWorldPerSec caps max world-units/sec so landscape vs portrait feels similar.
-    this.baseMoveLerpFactor = 1.0
-    this.baseMoveSpeedWorldPerSec = 980
-
-    this.mesh.position.z = 1
+    this.grid = grid
+    this.cell = this.grid.worldToCell(0, 0)
+    this.mesh.position.set(this.grid.cellToWorld(this.cell).x, this.grid.cellToWorld(this.cell).y, 1)
   }
 
   getRadius(): number {
     return this.mesh.scale.x
+  }
+
+  /** Occupancy cell for collisions (switches halfway through a tween). */
+  getCell(): Cell {
+    if (!this.tweening || !this.toCell) return this.cell
+    return this.tweenProgress >= 0.5 ? this.toCell : this.cell
+  }
+
+  getLastMoveDir(): Dir {
+    return { x: this.lastMoveDir.x, y: this.lastMoveDir.y }
+  }
+
+  setDesiredDir(dir: Dir): void {
+    this.desiredDir = dir
+  }
+
+  setCell(cell: Cell): void {
+    this.tweening = false
+    this.toCell = null
+    this.tweenProgress = 0
+    this.cell = this.grid.clampCell(cell)
+    const wp = this.grid.cellToWorld(this.cell)
+    this.mesh.position.set(wp.x, wp.y, 1)
   }
 
   setSize(size: number): void {
@@ -55,35 +79,70 @@ export class Player {
     this.wodGlowStartMs = nowMs
   }
 
-  update(deltaSeconds: number, ctx: PlayerUpdateContext): void {
-    // Bigger player = sluggier.
-    const sizeRatio = this.initialSize / Math.max(this.initialSize, this.size)
-    const effectiveLerp = this.baseMoveLerpFactor * Math.pow(sizeRatio, 0.4)
-    const kDesired = 1 - Math.exp(-effectiveLerp * deltaSeconds) // smoothing (0..1)
-    const maxSpeed = this.baseMoveSpeedWorldPerSec * Math.pow(sizeRatio, 0.4) // cap velocity magnitude
+  setSpeedMultiplier(mult: number): void {
+    this.speedMultiplier = Math.max(0.1, mult)
+  }
 
-    const pos = this.mesh.position
+  private getSafeCellRange(): { min: number; max: number } {
     const r = this.getRadius()
+    const min = Math.ceil(r / Math.max(1e-6, this.grid.cellSize))
+    const max = this.grid.divisions - min
+    return { min, max }
+  }
 
-    const targetX = THREE.MathUtils.clamp(ctx.pointerWorld.x, ctx.bounds.minX + r, ctx.bounds.maxX - r)
-    const targetY = THREE.MathUtils.clamp(ctx.pointerWorld.y, ctx.bounds.minY + r, ctx.bounds.maxY - r)
+  private clampCellToSafeRange(cell: Cell): Cell {
+    const { min, max } = this.getSafeCellRange()
+    return { x: Math.max(min, Math.min(max, cell.x)), y: Math.max(min, Math.min(max, cell.y)) }
+  }
 
-    const dx = targetX - pos.x
-    const dy = targetY - pos.y
-    const dist = Math.hypot(dx, dy)
+  private tryStartTweenTo(next: Cell): void {
+    const fw = this.grid.cellToWorld(this.cell)
+    const tw = this.grid.cellToWorld(next)
+    this.fromWorld.set(fw.x, fw.y)
+    this.toWorld.set(tw.x, tw.y)
+    this.toCell = next
+    this.tweening = true
+    this.tweenProgress = 0
+    this.lastMoveDir = { x: this.desiredDir.x, y: this.desiredDir.y }
+  }
 
-    if (dist > 0.0001) {
-      // First compute how far we'd like to move this frame (based on smoothing),
-      // then cap it so landscape/portrait doesn't make sideways aiming too fast.
-      const desiredStep = dist * kDesired
-      const maxStep = maxSpeed * deltaSeconds
-      const step = Math.min(desiredStep, maxStep)
-      const k = step / dist
-      pos.x += dx * k
-      pos.y += dy * k
+  private finishTween(): void {
+    if (!this.toCell) return
+    this.cell = this.toCell
+    this.mesh.position.set(this.toWorld.x, this.toWorld.y, 1)
+    this.tweening = false
+    this.toCell = null
+    this.tweenProgress = 0
+  }
+
+  update(deltaSeconds: number): void {
+    if (this.tweening && this.toCell) {
+      this.tweenProgress += ((deltaSeconds * 1000) / PLAYER_GRID_CELL_TWEEN_MS) * this.speedMultiplier
+      if (this.tweenProgress >= 1) {
+        this.tweenProgress = 1
+        this.finishTween()
+        // Chain another step if the player is still holding a direction.
+        if (this.desiredDir.x !== 0 || this.desiredDir.y !== 0) {
+          const next = this.clampCellToSafeRange({
+            x: this.cell.x + this.desiredDir.x,
+            y: this.cell.y + this.desiredDir.y,
+          })
+          if (next.x !== this.cell.x || next.y !== this.cell.y) this.tryStartTweenTo(next)
+        }
+      } else {
+        // Linear motion = constant speed between cells (no ease-in/out “pause”).
+        const p = Math.min(1, this.tweenProgress)
+        this.mesh.position.x = THREE.MathUtils.lerp(this.fromWorld.x, this.toWorld.x, p)
+        this.mesh.position.y = THREE.MathUtils.lerp(this.fromWorld.y, this.toWorld.y, p)
+        this.mesh.position.z = 1
+      }
+    } else if (this.desiredDir.x !== 0 || this.desiredDir.y !== 0) {
+      const next = this.clampCellToSafeRange({
+        x: this.cell.x + this.desiredDir.x,
+        y: this.cell.y + this.desiredDir.y,
+      })
+      if (next.x !== this.cell.x || next.y !== this.cell.y) this.tryStartTweenTo(next)
     }
-
-    pos.z = 1
 
     if (this.wodGlowActive) {
       const t = (performance.now() - this.wodGlowStartMs) / 1000

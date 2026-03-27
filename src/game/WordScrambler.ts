@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { Letter } from './entities/Letter'
 import { isVowelLetter } from './LetterScoring'
+import type { Cell, Grid } from './Grid'
 
-type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
 type ThemeMode = 'dark' | 'light'
 
 function shuffleInPlace<T>(arr: T[]): void {
@@ -36,13 +36,13 @@ function makeLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
   const letterFill = isDark ? 'rgba(255,255,255,0.98)' : 'rgba(27, 31, 48, 0.96)'
   const letterStroke = isDark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.7)'
 
-  ctx.beginPath()
-  ctx.arc(96, 96, 76, 0, Math.PI * 2)
+  const pad = 14
+  const side = canvas.width - pad * 2
   ctx.fillStyle = baseFill
-  ctx.fill()
+  ctx.fillRect(pad, pad, side, side)
   ctx.lineWidth = 6
   ctx.strokeStyle = baseStroke
-  ctx.stroke()
+  ctx.strokeRect(pad, pad, side, side)
 
   ctx.shadowColor = shadowColor
   ctx.shadowBlur = 10
@@ -70,12 +70,11 @@ interface StarterAnim {
 
 export class WordScrambler {
   private readonly scene: THREE.Scene
-  private readonly bounds: Bounds
+  private readonly grid: Grid
 
   private readonly letterRadius: number
   private maxLetters = 300
   private starterScale = 58
-  private starterSpacing = 92
 
   private readonly letters: Letter[] = []
   private readonly textureByChar = new Map<string, THREE.Texture>()
@@ -86,25 +85,22 @@ export class WordScrambler {
   private readonly starterLetterSet = new Set<Letter>()
   private readonly starterAnimData = new Map<Letter, StarterAnim>()
 
-  // When > 0, randomInBounds retries positions that fall inside this circle.
   private spawnExclusionRadius = 0
   private readonly spawnExclusionCenter = new THREE.Vector2(0, 0)
 
   constructor(options: {
     scene: THREE.Scene
-    bounds: Bounds
+    grid: Grid
     letterRadius?: number
     maxLetters?: number
     starterScale?: number
-    starterSpacing?: number
     themeMode?: ThemeMode
   }) {
     this.scene = options.scene
-    this.bounds = options.bounds
+    this.grid = options.grid
     this.letterRadius = options.letterRadius ?? 26
     if (options.maxLetters != null) this.maxLetters = options.maxLetters
     if (options.starterScale != null) this.starterScale = options.starterScale
-    if (options.starterSpacing != null) this.starterSpacing = options.starterSpacing
     if (options.themeMode != null) this.themeMode = options.themeMode
     this.buildPool()
   }
@@ -180,72 +176,47 @@ export class WordScrambler {
   }
 
   private placeSingleLetterRandom(letter: Letter): void {
-    const margin = Math.max(120, this.letterRadius * 4.2)
-    const p = this.randomInBounds(margin)
-    letter.sprite.position.set(
-      THREE.MathUtils.clamp(p.x, this.bounds.minX + this.letterRadius, this.bounds.maxX - this.letterRadius),
-      THREE.MathUtils.clamp(p.y, this.bounds.minY + this.letterRadius, this.bounds.maxY - this.letterRadius),
-      1,
-    )
+    const x = Math.floor(Math.random() * (this.grid.divisions + 1))
+    const y = Math.floor(Math.random() * (this.grid.divisions + 1))
+    const cell = this.grid.clampCell({ x, y })
+    const wp = this.grid.cellToWorld(cell)
+    letter.setCell(cell)
+    letter.sprite.position.set(wp.x, wp.y, 1)
   }
 
-  private randomInBounds(margin: number): THREE.Vector2 {
-    const gen = () => new THREE.Vector2(
-      THREE.MathUtils.lerp(this.bounds.minX + margin, this.bounds.maxX - margin, Math.random()),
-      THREE.MathUtils.lerp(this.bounds.minY + margin, this.bounds.maxY - margin, Math.random()),
-    )
-    if (this.spawnExclusionRadius <= 0) return gen()
-    for (let i = 0; i < 15; i++) {
-      const p = gen()
-      if (p.distanceTo(this.spawnExclusionCenter) >= this.spawnExclusionRadius) return p
+  /** Grid cells far enough from spawn (0,0) to place random field letters — uniform spread, no edge clumping. */
+  private cellsOutsideSpawnExclusion(): Cell[] {
+    const cx = this.spawnExclusionCenter.x
+    const cy = this.spawnExclusionCenter.y
+    const rSq = this.spawnExclusionRadius * this.spawnExclusionRadius
+    const out: Cell[] = []
+    const d = this.grid.divisions
+    for (let x = 0; x <= d; x++) {
+      for (let y = 0; y <= d; y++) {
+        const cell = this.grid.clampCell({ x, y })
+        const wp = this.grid.cellToWorld(cell)
+        const dx = wp.x - cx
+        const dy = wp.y - cy
+        if (dx * dx + dy * dy >= rSq) out.push(cell)
+      }
     }
-    return gen()
+    return out
   }
 
-  /**
-   * Scatter `count` random weighted letters in clusters (same layout style as the old word pool).
-   */
+  /** One letter per shuffled cell so the map fills evenly (no clusters shoved to the rim). */
   private placeRandomLetterField(count: number): void {
     this.clearLetters()
-    let poolIndex = 0
-
-    while (poolIndex < count && poolIndex < this.letters.length) {
-      const remaining = count - poolIndex
-      const wordLen = Math.min(3 + Math.floor(Math.random() * 4), remaining)
-      const fakeWord = Array.from({ length: wordLen }, () => pickWeightedLetter()).join('')
-      const letters = fakeWord.split('')
-      shuffleInPlace(letters)
-
-      const clusterCount = Math.min(4, Math.max(2, letters.length >= 5 ? 3 : 2))
-      const clusterCenters: THREE.Vector2[] = []
-      const centerMargin = Math.max(120, this.letterRadius * 3.8)
-      for (let c = 0; c < clusterCount; c++) clusterCenters.push(this.randomInBounds(centerMargin))
-      const clusterRadius = Math.max(140, this.letterRadius * 6)
-
-      for (let i = 0; i < letters.length; i++) {
-        if (poolIndex >= this.letters.length) return
-        const ch = letters[i]
-        const l = this.letters[poolIndex++]
-        this.applyLetterVisual(l, ch)
-
-        const center = clusterCenters[i % clusterCount]
-        const angle = Math.random() * Math.PI * 2
-        const dist = Math.sqrt(Math.random()) * clusterRadius
-
-        l.sprite.position.set(
-          THREE.MathUtils.clamp(
-            center.x + Math.cos(angle) * dist,
-            this.bounds.minX + this.letterRadius,
-            this.bounds.maxX - this.letterRadius,
-          ),
-          THREE.MathUtils.clamp(
-            center.y + Math.sin(angle) * dist,
-            this.bounds.minY + this.letterRadius,
-            this.bounds.maxY - this.letterRadius,
-          ),
-          1,
-        )
-      }
+    const candidates = this.cellsOutsideSpawnExclusion()
+    shuffleInPlace(candidates)
+    const n = Math.min(count, candidates.length, this.letters.length)
+    for (let i = 0; i < n; i++) {
+      const cell = candidates[i]!
+      const ch = pickWeightedLetter()
+      const l = this.letters[i]
+      this.applyLetterVisual(l, ch)
+      const wp = this.grid.cellToWorld(cell)
+      l.setCell(cell)
+      l.sprite.position.set(wp.x, wp.y, 1)
     }
   }
 
@@ -254,13 +225,14 @@ export class WordScrambler {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fill the map with random letters outside the spawn exclusion zone; leaves
+   * Fill the map with random letters outside a modest spawn bubble; leaves
    * `reserveInactive` slots inactive for the starter word.
    */
   initRandomFill(reserveInactive = 3): void {
     this.starterLetterSet.clear()
     this.starterAnimData.clear()
-    this.spawnExclusionRadius = 850
+    // Small exclusion only — avoids a huge empty ring around spawn while keeping starter letters clear.
+    this.spawnExclusionRadius = 400
     this.spawnExclusionCenter.set(0, 0)
 
     const count = Math.max(0, this.maxLetters - reserveInactive)
@@ -270,7 +242,8 @@ export class WordScrambler {
   }
 
   /**
-   * Place the letters of `word` in a LEFT-TO-RIGHT readable line above `center`.
+   * Place the letters of `word` in a vertical column below the player with one empty block gap.
+   * First letter sits two cells under `center`, then further down; if there is no room, uses a horizontal row under the player.
    */
   spawnStarterWord(word: string, center: THREE.Vector2): void {
     this.starterLetterSet.clear()
@@ -278,22 +251,46 @@ export class WordScrambler {
 
     const chars = word.toLowerCase().split('')
     const starterScale = this.starterScale
-    const spacing = this.starterSpacing
-    const totalWidth = (chars.length - 1) * spacing
-    const by = center.y + 210
+    const n = chars.length
+    const pc = this.grid.worldToCell(center.x, center.y)
 
-    for (let i = 0; i < chars.length; i++) {
+    // Downward column: y decreases (world "down") with one-cell buffer from player.
+    const startY = pc.y - 2
+    const lastY = startY - (n - 1)
+    if (lastY >= 0) {
+      for (let i = 0; i < n; i++) {
+        const slot = this.getInactiveLetter()
+        if (!slot) return
+
+        this.applyLetterVisual(slot, chars[i])
+        slot.sprite.scale.setScalar(starterScale)
+
+        const cell = this.grid.clampCell({ x: pc.x, y: startY - i })
+        const wp = this.grid.cellToWorld(cell)
+        slot.setCell(cell)
+        slot.sprite.position.set(wp.x, wp.y, 2)
+
+        this.starterLetterSet.add(slot)
+        this.starterAnimData.set(slot, { baseX: wp.x, baseY: wp.y, phaseOffset: i / Math.max(1, n) })
+      }
+      return
+    }
+
+    // Not enough room below (near map bottom): horizontal row under the player.
+    const spacing = this.grid.cellSize
+    const totalWidth = (n - 1) * spacing
+    const by = center.y - this.grid.cellSize * 3.25
+    for (let i = 0; i < n; i++) {
       const slot = this.getInactiveLetter()
       if (!slot) return
-
       this.applyLetterVisual(slot, chars[i])
       slot.sprite.scale.setScalar(starterScale)
-
       const bx = center.x - totalWidth / 2 + i * spacing
-      slot.sprite.position.set(bx, by, 2)
-
+      const snapped = this.grid.snapWorldToCell(bx, by)
+      slot.setCell(snapped.cell)
+      slot.sprite.position.set(snapped.world.x, snapped.world.y, 2)
       this.starterLetterSet.add(slot)
-      this.starterAnimData.set(slot, { baseX: bx, baseY: by, phaseOffset: i / chars.length })
+      this.starterAnimData.set(slot, { baseX: snapped.world.x, baseY: snapped.world.y, phaseOffset: i / Math.max(1, n) })
     }
   }
 
@@ -309,8 +306,8 @@ export class WordScrambler {
       const hue = vowel ? 0.33 : 0.79
       const pulse = 0.55 + 0.15 * Math.sin(t * 3.0 + data.phaseOffset * Math.PI * 2)
       mat.color.setHSL(hue, 1.0, pulse)
-      const bobY = Math.sin(t * 3.0 + data.phaseOffset * Math.PI * 2) * 10
-      letter.sprite.position.set(data.baseX, data.baseY + bobY, 2)
+      // Keep starter letters fixed on grid points so grid-cell collisions remain consistent.
+      letter.sprite.position.set(data.baseX, data.baseY, 2)
     }
   }
 

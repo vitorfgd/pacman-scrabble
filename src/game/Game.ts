@@ -4,11 +4,12 @@ import { Enemy } from './entities/Enemy'
 import type { EnemyRole } from './entities/Enemy'
 import { Fruit } from './entities/Fruit'
 import { WordScrambler } from './WordScrambler'
-import { WordSource, anagramSignature } from './WordSource'
+import { WordSource } from './WordSource'
 import { WordValidator } from './WordValidator'
 import { getLetterScore, isVowelLetter } from './LetterScoring'
+import { Grid, type Dir } from './Grid'
 import { Hud } from '../ui/hud'
-import { playInfoCelebration, playResetCelebration, playWordCelebration } from '../ui/wordCelebration'
+import { playInfoCelebration, playResetCelebration, playSubmissionFail, playWordCelebration } from '../ui/wordCelebration'
 
 export type GameOptions = { container: HTMLElement }
 
@@ -32,7 +33,17 @@ const QUEST_SCHEDULE = [
   { length: 5, count: 1 },
 ] as const
 
-function createGridTexture(gridSizePx = 512, lineEveryPx = 64, themeMode: ThemeMode): THREE.Texture {
+const SPEED_BOOST_CHARGE_MS = 18000
+const SPEED_BOOST_ACTIVE_MS = 2000
+const SPEED_BOOST_MULT = 1.6
+
+/** Enemies chase only inside this radius (grid cells, Euclidean). */
+const CHASE_ENTER_CELLS = 4
+/** Hysteresis: stop chasing only after player is farther than this (reduces chase/patrol flicker). */
+const CHASE_EXIT_CELLS = 7
+
+/** One tile = one walkable cell; L-shaped edges tile seamlessly so lines match world grid. */
+function createGridCellTileTexture(gridSizePx = 512, themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
   canvas.width = gridSizePx
   canvas.height = gridSizePx
@@ -47,22 +58,14 @@ function createGridTexture(gridSizePx = 512, lineEveryPx = 64, themeMode: ThemeM
   }
   ctx.fillRect(0, 0, gridSizePx, gridSizePx)
 
-  ctx.strokeStyle = themeMode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(27,31,48,0.06)'
+  ctx.strokeStyle = themeMode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(27,31,48,0.08)'
   ctx.lineWidth = 1
-
-  for (let x = 0; x <= gridSizePx; x += lineEveryPx) {
-    ctx.beginPath()
-    ctx.moveTo(x, 0)
-    ctx.lineTo(x, gridSizePx)
-    ctx.stroke()
-  }
-
-  for (let y = 0; y <= gridSizePx; y += lineEveryPx) {
-    ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(gridSizePx, y)
-    ctx.stroke()
-  }
+  ctx.beginPath()
+  ctx.moveTo(0, 0)
+  ctx.lineTo(0, gridSizePx)
+  ctx.moveTo(0, 0)
+  ctx.lineTo(gridSizePx, 0)
+  ctx.stroke()
 
   const texture = new THREE.CanvasTexture(canvas)
   texture.wrapS = THREE.RepeatWrapping
@@ -81,22 +84,17 @@ export class Game {
 
   private player: Player
   private gridPlane: THREE.Mesh
+  private readonly grid: Grid
 
   private readonly mapSize = 6000
   private bounds: Bounds = { minX: -3000, maxX: 3000, minY: -3000, maxY: 3000 }
 
-  private readonly raycaster = new THREE.Raycaster()
-  private readonly pointerNdc = new THREE.Vector2(0, 0)
-  private readonly pointerWorld = new THREE.Vector2(0, 0)
-  private readonly pointerHit = new THREE.Vector3()
-  private readonly plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
-  private readonly _projVec = new THREE.Vector3()
+  // UI is rendered in fixed-position DOM (quest slots), no world->screen projection needed.
 
   private hud: Hud | null = null
   private wordSource: WordSource | null = null
-  private wordScrambler: WordScrambler | null = null
   private wordValidator: WordValidator | null = null
-
+  private wordScrambler: WordScrambler | null = null
   private wordOfDayByLength: Record<number, string> = { 3: '', 4: '', 5: '' }
   private currentWordOfDay = ''
 
@@ -104,11 +102,10 @@ export class Game {
   private questInPhaseDone = 0
   private questRandomMode = false
   private currentQuestLength = 3
+  /** Random word used only for starter-letter tiles on the map (quest accepts any valid word of that length). */
+  private questTargetWord = ''
 
   private gameStartMs = 0
-  private enemyGlobalRamp = 1
-  private readonly enemyRampMax = 2.2
-  private readonly enemyRampPerSecond = 0.008
 
   // HTML tray element — positioned to follow player via world→screen projection
   private trayEl: HTMLDivElement | null = null
@@ -117,8 +114,9 @@ export class Game {
   private wordCompletionInFlight = false
 
   private enemyPool: Enemy[] = []
-  private enemySpeedScales: number[] = []
   private enemyLastHitMs: number[] = []
+  /** True while this enemy is in "aggro" chase mode (distance hysteresis). */
+  private enemyChaseAggro: boolean[] = []
   private readonly enemyCollisionCooldownMs = 450
 
   private fruit: Fruit
@@ -127,18 +125,20 @@ export class Game {
   // (Tips removed for now)
 
   private score = 0
+  private wordsFound = 0
 
   private powerModeUntilMs = 0
   private powerModeActive = false
+
+  private speedBoostChargeProgressMs = 0
+  private speedBoostActiveUntilMs = 0
 
   private resetting = false
   private paused = false
   private pauseStartedMs = 0
   private wordCelebrationEl: HTMLDivElement | null = null
-
-  // Player velocity — sampled each frame for interceptor enemy AI.
-  private readonly playerPrevPos = new THREE.Vector2(0, 0)
-  private readonly playerVelocity = new THREE.Vector2(0, 0)
+  private startInstructionEl: HTMLDivElement | null = null
+  private startSwipeGestureEl: HTMLDivElement | null = null
 
   // Word-completion shockwave ring.
   private shockwaveMesh: THREE.Mesh | null = null
@@ -153,6 +153,9 @@ export class Game {
   private cameraViewHeightWorld = 1380
   private readonly cameraFollowSpeed = 4.5
   private viewportProfile: ViewportProfile = this.computeViewportProfile()
+
+  /** Until the first directional input, enemies (and fruit) stay idle. */
+  private awaitingFirstMove = true
 
   constructor(options: GameOptions) {
     this.container = options.container
@@ -177,13 +180,15 @@ export class Game {
     this.scene.add(dir)
 
     const themeMode: ThemeMode = 'dark'
-    const gridTex = createGridTexture(512, 64, themeMode)
+    const gridDivisions = 64
+    this.grid = new Grid(this.bounds, gridDivisions)
+    const gridTex = createGridCellTileTexture(512, themeMode)
+    gridTex.repeat.set(this.grid.divisions, this.grid.divisions)
     const gridMat = new THREE.MeshStandardMaterial({ map: gridTex, roughness: 1, metalness: 0 })
-    gridTex.repeat.set(8, 8)
     this.gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(this.mapSize, this.mapSize), gridMat)
     this.scene.add(this.gridPlane)
 
-    this.player = new Player()
+    this.player = new Player(this.grid)
     this.player.setSize(this.initialPlayerSize)
     this.scene.add(this.player.mesh)
 
@@ -207,7 +212,13 @@ export class Game {
     this.recomputeBounds()
     this.setupInput()
     this.onResize()
+    this.camera.position.set(this.player.mesh.position.x, this.player.mesh.position.y, 400)
+    this.camera.lookAt(this.player.mesh.position.x, this.player.mesh.position.y, 0)
+  }
 
+  private setStartInstructionVisible(visible: boolean): void {
+    this.startInstructionEl?.classList.toggle('start-instruction--hidden', !visible)
+    this.startSwipeGestureEl?.classList.toggle('start-swipe-gesture--hidden', !visible)
   }
 
   private recomputeBounds() {
@@ -216,28 +227,63 @@ export class Game {
   }
 
   private setupInput() {
-    const updatePointer = (clientX: number, clientY: number) => {
-      const rect = this.renderer.domElement.getBoundingClientRect()
-      this.pointerNdc.set(
-        ((clientX - rect.left) / rect.width) * 2 - 1,
-        -(((clientY - rect.top) / rect.height) * 2 - 1),
-      )
-    }
-
-    this.renderer.domElement.addEventListener('pointermove', (ev: PointerEvent) => {
-      updatePointer(ev.clientX, ev.clientY)
-    })
-    window.addEventListener('pointermove', (ev: PointerEvent) => {
-      if (!this.isPortraitMode()) return
-      updatePointer(ev.clientX, ev.clientY)
-    }, { passive: true })
-
     window.addEventListener('keydown', (ev: KeyboardEvent) => {
-      if (ev.code === 'Space') { ev.preventDefault(); void this.tryCompleteWord() }
+      const set = (dir: Dir) => {
+        ev.preventDefault()
+        if (this.awaitingFirstMove) {
+          this.awaitingFirstMove = false
+          this.setStartInstructionVisible(false)
+        }
+        this.player.setDesiredDir(dir)
+      }
+
+      // Desktop: WASD / arrows steer the next grid step direction.
+      if (ev.code === 'ArrowUp' || ev.code === 'KeyW') return set({ x: 0, y: 1 })
+      if (ev.code === 'ArrowDown' || ev.code === 'KeyS') return set({ x: 0, y: -1 })
+      if (ev.code === 'ArrowLeft' || ev.code === 'KeyA') return set({ x: -1, y: 0 })
+      if (ev.code === 'ArrowRight' || ev.code === 'KeyD') return set({ x: 1, y: 0 })
       if (ev.code === 'KeyR') this.resetTray()
       if (ev.code === 'KeyP') this.togglePause()
       if (ev.code === 'KeyH') this.hardResetGame()
     })
+
+    // Mobile/portrait: swipe to set direction.
+    const start = { x: 0, y: 0, active: false }
+    this.renderer.domElement.addEventListener('touchstart', (ev: TouchEvent) => {
+      if (!this.isPortraitMode()) return
+      if (ev.touches.length !== 1) return
+      start.active = true
+      start.x = ev.touches[0]?.clientX ?? 0
+      start.y = ev.touches[0]?.clientY ?? 0
+    }, { passive: true })
+
+    window.addEventListener('touchend', (ev: TouchEvent) => {
+      if (!start.active) return
+      start.active = false
+      if (!this.isPortraitMode()) return
+      if (ev.changedTouches.length !== 1) return
+      const endX = ev.changedTouches[0]?.clientX ?? 0
+      const endY = ev.changedTouches[0]?.clientY ?? 0
+      const dx = endX - start.x
+      const dy = endY - start.y
+      const dist = Math.hypot(dx, dy)
+      if (dist < 24) return
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (this.awaitingFirstMove) {
+          this.awaitingFirstMove = false
+          this.setStartInstructionVisible(false)
+        }
+        this.player.setDesiredDir({ x: Math.sign(dx) as -1 | 0 | 1, y: 0 })
+      } else {
+        // Screen Y grows down; world Y grows up.
+        if (this.awaitingFirstMove) {
+          this.awaitingFirstMove = false
+          this.setStartInstructionVisible(false)
+        }
+        this.player.setDesiredDir({ x: 0, y: (-Math.sign(dy)) as -1 | 0 | 1 })
+      }
+    }, { passive: true })
   }
 
   private onResize = () => {
@@ -246,7 +292,8 @@ export class Game {
     if (w <= 0 || h <= 0) return
     this.viewportProfile = this.computeViewportProfile()
     this.cameraViewHeightWorld = this.viewportProfile.cameraViewHeightWorld
-    this.renderer.setSize(w, h, false)
+    // updateStyle true so canvas CSS size matches the container (avoids off-center / wrong framing).
+    this.renderer.setSize(w, h, true)
     const aspect = w / h
     const halfY = this.cameraViewHeightWorld / 2
     const halfX = halfY * aspect
@@ -274,10 +321,10 @@ export class Game {
         letterRadius: 42,
         starterScale: 58,
         starterSpacing: 92,
-        enemyCount: 22,
+        enemyCount: 36,
         enemyBaseRadiusScale: 1,
-        enemyMinSpawnDist: 1180,
-        enemyMaxSpawnDist: Math.min(2600, this.mapSize / 2 - 80),
+        enemyMinSpawnDist: 1050,
+        enemyMaxSpawnDist: Math.min(2680, this.mapSize / 2 - 80),
       }
     }
     return {
@@ -286,10 +333,10 @@ export class Game {
       letterRadius: 56,
       starterScale: 72,
       starterSpacing: 104,
-      enemyCount: 18,
+      enemyCount: 30,
       enemyBaseRadiusScale: 0.92,
-      enemyMinSpawnDist: 1320,
-      enemyMaxSpawnDist: Math.min(2550, this.mapSize / 2 - 80),
+      enemyMinSpawnDist: 1100,
+      enemyMaxSpawnDist: Math.min(2620, this.mapSize / 2 - 80),
     }
   }
 
@@ -315,11 +362,15 @@ export class Game {
       this.hud.setOnResetTray(() => this.resetTray())
       this.hud.setOnPauseToggle(() => this.togglePause())
       this.hud.setOnHardReset(() => this.hardResetGame())
+      this.hud.setOnSpeedBoost(() => this.activateSpeedBoost(performance.now()))
       this.hud.setPauseButtonState(false)
 
       // Cache DOM refs
       this.trayEl = document.getElementById('tray') as HTMLDivElement | null
       this.wordCelebrationEl = document.getElementById('wordCelebration') as HTMLDivElement | null
+      this.startInstructionEl = document.getElementById('startInstruction') as HTMLDivElement | null
+      this.startSwipeGestureEl = document.getElementById('startSwipeGesture') as HTMLDivElement | null
+      this.setStartInstructionVisible(true)
 
       this.wordSource = new WordSource({ topWordCount: 1000 })
       this.wordValidator = new WordValidator()
@@ -334,41 +385,47 @@ export class Game {
 
       this.wordScrambler = new WordScrambler({
         scene: this.scene,
-        bounds: this.bounds,
+        grid: this.grid,
         letterRadius: this.viewportProfile.letterRadius,
         maxLetters: 300,
         starterScale: this.viewportProfile.starterScale,
-        starterSpacing: this.viewportProfile.starterSpacing,
         themeMode: 'dark',
       })
-      this.wordScrambler.initRandomFill(3)
-      const starterWord = this.wordSource.getWordByLength(3)
-      this.wordScrambler.spawnStarterWord(starterWord, new THREE.Vector2(0, 0))
       this.resetQuestState()
+      this.pickNewQuestTargetWord()
+      this.wordScrambler.initRandomFill(3)
+      this.wordScrambler.spawnStarterWord(this.questTargetWord, new THREE.Vector2(0, 0))
       this.updateQuestHud()
+      this.updateTrayContent()
 
       this.score = 0
+      this.wordsFound = 0
       this.hud.setScore(0)
+      this.hud.setWordsFound(0)
+      this.speedBoostChargeProgressMs = 0
+      this.speedBoostActiveUntilMs = 0
+      this.player.setSpeedMultiplier(1)
       this.gameStartMs = performance.now()
-      this.enemyGlobalRamp = 1
+      this.updateSpeedBoostHud(this.gameStartMs)
 
       this.setupEnemyPool()
       this.spawnInitialEnemies()
-      this.fruitNextSpawnMs = performance.now() + 3500 + Math.random() * 2500
+      // "Cherries": spawn more frequently so power mode opportunities are common.
+      this.fruitNextSpawnMs = performance.now() + (3500 + Math.random() * 2500) / 3
     } catch (err) {
       console.error('initGameAsync failed', err)
     }
   }
 
   private setupEnemyPool() {
-    const poolSize = 28
+    const poolSize = 48
     for (let i = 0; i < poolSize; i++) {
-      const e = new Enemy()
+      const e = new Enemy(this.grid)
       this.scene.add(e.mesh)
-      e.setActive(false, new THREE.Vector2(0, 0), 10)
+      e.setActive(false, { x: 0, y: 0 }, 10)
       this.enemyPool.push(e)
-      this.enemySpeedScales.push(1.05 + Math.random() * 0.9)
       this.enemyLastHitMs.push(0)
+      this.enemyChaseAggro.push(false)
     }
   }
 
@@ -384,35 +441,24 @@ export class Game {
   private spawnInitialEnemies() {
     const count = this.viewportProfile.enemyCount
     const tmp = new THREE.Vector2()
-    // Keep spawns outside this ring so the player can grab the starter word first.
     const minSpawnDist = this.viewportProfile.enemyMinSpawnDist
     const maxSpawnDist = this.viewportProfile.enemyMaxSpawnDist
-    for (const e of this.enemyPool) e.setActive(false, tmp, 10)
+    // Golden-angle spiral: even spread in angle + staggered radius (avoids clumping on map edges).
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+    for (let i = 0; i < this.enemyPool.length; i++) {
+      this.enemyChaseAggro[i] = false
+      this.enemyPool[i].setActive(false, { x: 0, y: 0 }, 10)
+    }
     for (let i = 0; i < count; i++) {
       const r = (18 + Math.random() * 20) * this.viewportProfile.enemyBaseRadiusScale
       const margin = r * 2
-      let placed = false
-      for (let attempt = 0; attempt < 55; attempt++) {
-        const angle = Math.random() * Math.PI * 2
-        const dist = minSpawnDist + Math.random() * (maxSpawnDist - minSpawnDist)
-        tmp.set(Math.cos(angle) * dist, Math.sin(angle) * dist)
-        if (
-          tmp.x >= this.bounds.minX + margin &&
-          tmp.x <= this.bounds.maxX - margin &&
-          tmp.y >= this.bounds.minY + margin &&
-          tmp.y <= this.bounds.maxY - margin
-        ) {
-          placed = true
-          break
-        }
-      }
-      if (!placed) {
-        const angle = Math.random() * Math.PI * 2
-        tmp.set(Math.cos(angle) * minSpawnDist, Math.sin(angle) * minSpawnDist)
-        tmp.x = THREE.MathUtils.clamp(tmp.x, this.bounds.minX + margin, this.bounds.maxX - margin)
-        tmp.y = THREE.MathUtils.clamp(tmp.y, this.bounds.minY + margin, this.bounds.maxY - margin)
-      }
-      this.enemyPool[i].setActive(true, tmp, r, this.pickEnemyRole(i))
+      const t = (i + 0.5) / Math.max(1, count)
+      const dist = minSpawnDist + t * (maxSpawnDist - minSpawnDist)
+      const angle = i * goldenAngle + (Math.random() - 0.5) * 0.35
+      tmp.set(Math.cos(angle) * dist, Math.sin(angle) * dist)
+      tmp.x = THREE.MathUtils.clamp(tmp.x, this.bounds.minX + margin, this.bounds.maxX - margin)
+      tmp.y = THREE.MathUtils.clamp(tmp.y, this.bounds.minY + margin, this.bounds.maxY - margin)
+      this.enemyPool[i].setActive(true, this.grid.worldToCell(tmp.x, tmp.y), r, this.pickEnemyRole(i))
     }
   }
 
@@ -428,41 +474,28 @@ export class Game {
 
   private update(deltaSeconds: number, nowMs: number) {
     if (this.paused) return
-    if (!this.resetting && this.gameStartMs > 0) {
-      const t = (nowMs - this.gameStartMs) / 1000
-      this.enemyGlobalRamp = Math.min(this.enemyRampMax, 1 + t * this.enemyRampPerSecond)
-    }
-
     this.updateCamera(deltaSeconds)
-    this.recomputePointerWorld()
-    this.player.update(deltaSeconds, { pointerWorld: this.pointerWorld, bounds: this.bounds })
+    this.player.update(deltaSeconds)
 
-    // Sample player velocity for interceptor AI.
-    const pp = this.player.mesh.position
-    this.playerVelocity.set(
-      (pp.x - this.playerPrevPos.x) / Math.max(0.001, deltaSeconds),
-      (pp.y - this.playerPrevPos.y) / Math.max(0.001, deltaSeconds),
-    )
-    this.playerPrevPos.set(pp.x, pp.y)
-
-    // Move HTML tray to follow player on screen
-    this.updateTrayPosition()
     this.updateShockwave(nowMs)
 
     if (!this.wordScrambler || !this.hud || !this.wordSource || !this.wordValidator) return
     if (this.resetting) return
 
     this.handlePowerMode(nowMs)
+    this.handleSpeedBoost(nowMs, deltaSeconds)
 
     if (!this.wordCompletionInFlight) {
       this.handleLetterCollisions()
     }
 
     this.wordScrambler?.updateStarterLetters(nowMs)
-    this.updateEnemies(deltaSeconds, nowMs)
-    this.maybeSpawnFruit(nowMs)
-    this.fruit.update(nowMs)
-    this.handleFruitCollision(nowMs)
+    if (!this.awaitingFirstMove) {
+      this.updateEnemies(deltaSeconds, nowMs)
+      this.maybeSpawnFruit(nowMs)
+      this.fruit.update(nowMs)
+      this.handleFruitCollision(nowMs)
+    }
   }
 
   // ── Camera ────────────────────────────────────────────────────────────────
@@ -475,49 +508,44 @@ export class Game {
     const targetX = THREE.MathUtils.clamp(this.player.mesh.position.x, this.bounds.minX + halfX, this.bounds.maxX - halfX)
     const targetY = THREE.MathUtils.clamp(this.player.mesh.position.y, this.bounds.minY + halfY, this.bounds.maxY - halfY)
 
-    const t = 1 - Math.exp(-this.cameraFollowSpeed * deltaSeconds)
-    this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetX, t)
-    this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetY, t)
-    this.camera.lookAt(this.camera.position.x, this.camera.position.y, 0)
-  }
-
-  private recomputePointerWorld() {
-    this.raycaster.setFromCamera(this.pointerNdc, this.camera)
-    const hit = this.raycaster.ray.intersectPlane(this.plane, this.pointerHit)
-    if (hit) this.pointerWorld.set(hit.x, hit.y)
-  }
-
-  // Project a world position to CSS screen coords
-  private worldToScreen(wx: number, wy: number): { x: number; y: number } {
-    this._projVec.set(wx, wy, 0)
-    this._projVec.project(this.camera)
-    const rect = this.renderer.domElement.getBoundingClientRect()
-    return {
-      x: (this._projVec.x * 0.5 + 0.5) * rect.width + rect.left,
-      y: (-this._projVec.y * 0.5 + 0.5) * rect.height + rect.top,
+    if (this.awaitingFirstMove) {
+      this.camera.position.x = targetX
+      this.camera.position.y = targetY
+    } else {
+      const t = 1 - Math.exp(-this.cameraFollowSpeed * deltaSeconds)
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetX, t)
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetY, t)
     }
-  }
-
-  // ── HTML tray (follows player) ────────────────────────────────────────────
-
-  private updateTrayPosition() {
-    if (!this.trayEl) return
-    const { x, y } = this.worldToScreen(
-      this.player.mesh.position.x,
-      this.player.mesh.position.y - this.player.getRadius() * 2.0,
-    )
-    this.trayEl.style.left = `${x}px`
-    this.trayEl.style.top = `${y}px`
+    this.camera.position.z = 400
+    this.camera.lookAt(this.camera.position.x, this.camera.position.y, 0)
   }
 
   private updateTrayContent() {
     if (!this.trayEl) return
     this.trayEl.innerHTML = ''
-    for (const ch of this.tray) {
-      const span = document.createElement('span')
-      span.className = `tray-letter ${isVowelLetter(ch) ? 'tray-vowel' : 'tray-consonant'}`
-      span.textContent = ch.toUpperCase()
-      this.trayEl.appendChild(span)
+    for (let i = 0; i < this.currentQuestLength; i++) {
+      const slot = document.createElement('span')
+      slot.className = 'tray-slot'
+      if (i < this.tray.length) {
+        const ch = this.tray[i] ?? ''
+        const pts = getLetterScore(ch)
+        slot.className += ` tray-tile tray-tile-filled ${isVowelLetter(ch) ? 'tray-vowel' : 'tray-consonant'}`
+        const letterEl = document.createElement('span')
+        letterEl.className = 'tray-tile-char'
+        letterEl.textContent = ch.toUpperCase()
+        const ptsEl = document.createElement('span')
+        ptsEl.className = 'tray-tile-points'
+        ptsEl.textContent = String(pts)
+        slot.appendChild(letterEl)
+        slot.appendChild(ptsEl)
+      } else {
+        slot.className += ' tray-tile tray-tile-empty'
+        const q = document.createElement('span')
+        q.className = 'tray-tile-hidden'
+        q.textContent = '?'
+        slot.appendChild(q)
+      }
+      this.trayEl.appendChild(slot)
     }
   }
 
@@ -539,14 +567,12 @@ export class Game {
 
   private handleLetterCollisions() {
     if (!this.wordScrambler) return
-    const playerPos = this.player.mesh.position
-    const playerRadius = this.player.getRadius()
+    const playerCell = this.player.getCell()
     let changed = false
     for (const letter of this.wordScrambler.getActiveLetters()) {
-      const dx = playerPos.x - letter.sprite.position.x
-      const dy = playerPos.y - letter.sprite.position.y
-      const r = playerRadius + letter.radius
-      if (dx * dx + dy * dy <= r * r * 0.85) {
+      if (this.tray.length >= this.currentQuestLength) break
+      const lc = letter.getCell()
+      if (lc.x === playerCell.x && lc.y === playerCell.y) {
         this.tray.push(letter.char)
         letter.setActive(false)
         this.wordScrambler.spawnReplacementLetter()
@@ -556,6 +582,9 @@ export class Game {
     if (changed) {
       this.updateTrayContent()
       this.updateQuestHud()
+      if (this.tray.length === this.currentQuestLength && !this.wordCompletionInFlight) {
+        void this.tryCompleteWord()
+      }
     }
   }
 
@@ -564,9 +593,9 @@ export class Game {
   private async tryCompleteWord() {
     if (!this.wordValidator || this.wordCompletionInFlight || !this.tray.length) return
     if (this.paused) return
-    if (this.tray.length < this.currentQuestLength) return
+    if (this.tray.length !== this.currentQuestLength) return
     const joined = this.tray.join('').toLowerCase()
-    if (!this.wordValidator.isValidMultiset(joined)) {
+    if (!this.wordValidator.isValidExactWord(joined)) {
       this.handleInvalidSubmission()
       return
     }
@@ -579,12 +608,12 @@ export class Game {
     this.tray = []
     this.updateTrayContent()
     if (returned.length > 0) this.wordScrambler.spawnLettersFromTray(returned)
-    playInfoCelebration(this.wordCelebrationEl, 'NOT A WORD', 'Tray reset. No points lost.', 1600)
+    playSubmissionFail(this.wordCelebrationEl, 'NOT A WORD', `Spell a real ${this.currentQuestLength}-letter word.`)
   }
 
-  private getQuestMultiplier(): number {
-    if (this.questRandomMode) return 2.5
-    return 1.2 + this.questScheduleIndex * 0.35
+  private pickNewQuestTargetWord(): void {
+    if (!this.wordSource) return
+    this.questTargetWord = this.wordSource.getWordByLength(this.currentQuestLength)
   }
 
   private resetQuestState(): void {
@@ -617,18 +646,17 @@ export class Game {
     if (!this.wordScrambler || !this.hud || this.wordCompletionInFlight) return
     this.wordCompletionInFlight = true
     try {
-      const questMult = this.getQuestMultiplier()
       const letters = word.toLowerCase().split('')
 
       const perLetterPoints = letters.map((ch) => getLetterScore(ch))
       const basePoints = perLetterPoints.reduce((a, b) => a + b, 0)
 
-      let pts = Math.round(basePoints * questMult)
+      let pts = basePoints
       let grow = pts * 0.006
 
       const wodWord = this.currentWordOfDay
       const isWordOfDay =
-        wodWord.length > 0 && anagramSignature(word) === anagramSignature(wodWord)
+        wodWord.length > 0 && word.toLowerCase() === wodWord.toLowerCase()
 
       if (isWordOfDay) {
         // Massive bonus for the daily target.
@@ -637,12 +665,6 @@ export class Game {
         this.player.setWordOfDayGlow(true, performance.now())
       }
 
-      this.player.setSize(this.player.getRadius() + grow)
-      this.score += pts
-      this.hud?.setScore(this.score)
-      this.triggerWordShockwave(performance.now())
-      this.advanceQuestAfterCompletion()
-      this.updateQuestHud()
       playWordCelebration(this.wordCelebrationEl, {
         letters,
         pointsPerLetter: Math.max(1, Math.round(pts / Math.max(1, letters.length))),
@@ -652,6 +674,15 @@ export class Game {
         wordOfDayComplete: isWordOfDay,
       })
 
+      this.player.setSize(this.player.getRadius() + grow)
+      this.score += pts
+      this.wordsFound += 1
+      this.hud?.setScore(this.score)
+      this.hud?.setWordsFound(this.wordsFound)
+      this.triggerWordShockwave(performance.now())
+      this.advanceQuestAfterCompletion()
+      this.pickNewQuestTargetWord()
+      this.updateQuestHud()
       this.tray = []
       this.updateTrayContent()
     } finally {
@@ -662,32 +693,44 @@ export class Game {
   // ── Enemies ───────────────────────────────────────────────────────────────
 
   private updateEnemies(deltaSeconds: number, nowMs: number) {
-    const tmpOff = new THREE.Vector2()
-    const tmpPP = new THREE.Vector2()
-
     for (let i = 0; i < this.enemyPool.length; i++) {
       const enemy = this.enemyPool[i]
       if (!enemy.isActive()) continue
 
-      const pp = this.player.mesh.position
-      const pr = this.player.getRadius()
-      tmpPP.set(pp.x, pp.y)
+      const playerCell = this.player.getCell()
+      const playerLastDir = this.player.getLastMoveDir()
+      const enemyCellBefore = enemy.getCell()
+      const dSq = this.grid.cellDistanceSq(enemyCellBefore, playerCell)
+      const enterSq = CHASE_ENTER_CELLS * CHASE_ENTER_CELLS
+      const exitSq = CHASE_EXIT_CELLS * CHASE_EXIT_CELLS
 
-      const dx = pp.x - enemy.mesh.position.x
-      const dy = pp.y - enemy.mesh.position.y
-      const dSq = dx * dx + dy * dy
-      const chaseR = 1100
-      const speedScale = this.enemySpeedScales[i] * this.enemyGlobalRamp
-      enemy.update(deltaSeconds, tmpPP, this.playerVelocity, this.bounds, speedScale, dSq <= chaseR * chaseR, nowMs, this.powerModeActive)
+      if (!this.enemyChaseAggro[i]) {
+        if (dSq <= enterSq) this.enemyChaseAggro[i] = true
+      } else {
+        if (dSq >= exitSq) this.enemyChaseAggro[i] = false
+      }
 
-      const r = pr + enemy.getRadius()
-      if (dSq > r * r * 0.92) continue
+      const shouldChase = this.enemyChaseAggro[i]
+
+      enemy.update(
+        deltaSeconds,
+        playerCell,
+        playerLastDir,
+        shouldChase,
+        this.powerModeActive,
+      )
+
+      const enemyCellAfter = enemy.getCell()
+      const hitNow =
+        (enemyCellBefore.x === playerCell.x && enemyCellBefore.y === playerCell.y) ||
+        (enemyCellAfter.x === playerCell.x && enemyCellAfter.y === playerCell.y)
+      if (!hitNow) continue
       if (nowMs - this.enemyLastHitMs[i] < this.enemyCollisionCooldownMs) continue
       this.enemyLastHitMs[i] = nowMs
 
       if (this.powerModeActive) {
-        this.enemySpeedScales[i] = 1.05 + Math.random() * 0.9
-        enemy.setActive(false, tmpOff, 10)
+        this.enemyChaseAggro[i] = false
+        enemy.setActive(false, { x: 0, y: 0 }, 10)
       } else {
         this.requestReset()
         return
@@ -719,30 +762,45 @@ export class Game {
     this.resetting = true
     this.powerModeActive = false
     this.hud?.setPowerMode(false)
+    this.speedBoostChargeProgressMs = 0
+    this.speedBoostActiveUntilMs = 0
+    this.player.setSpeedMultiplier(1)
 
     playResetCelebration(
       this.wordCelebrationEl,
       'OUCH! RESET!',
-      `Quest target: at least ${this.currentQuestLength} letters. Spell to grow.`,
+      `Quest target: ${this.currentQuestLength} letters. Spell to grow.`,
     )
     this.tray = []
     this.updateTrayContent()
     this.player.setSize(this.initialPlayerSize)
-    this.player.mesh.position.set(0, 0, 1)
+    this.player.setCell(this.grid.worldToCell(0, 0))
 
-    const tmp = new THREE.Vector2(0, 0)
-    for (const e of this.enemyPool) e.setActive(false, tmp, 10)
-    this.fruit.setActive(false, tmp, 22)
+    for (let i = 0; i < this.enemyPool.length; i++) {
+      this.enemyChaseAggro[i] = false
+      this.enemyPool[i].setActive(false, { x: 0, y: 0 }, 10)
+    }
+    this.fruit.setActive(false, new THREE.Vector2(0, 0), 22)
     if (this.shockwaveMesh) { this.shockwaveMesh.visible = false; this.shockwaveActive = false }
 
     this.score = 0
+    this.wordsFound = 0
     this.hud?.setScore(0)
+    this.hud?.setWordsFound(0)
     this.resetQuestState()
+    this.pickNewQuestTargetWord()
+    if (this.wordScrambler && this.questTargetWord) {
+      this.wordScrambler.initRandomFill(this.questTargetWord.length)
+      this.wordScrambler.spawnStarterWord(this.questTargetWord, new THREE.Vector2(0, 0))
+    }
+    this.player.setDesiredDir({ x: 0, y: 0 })
+    this.awaitingFirstMove = true
+    this.setStartInstructionVisible(true)
+    this.updateSpeedBoostHud(performance.now())
     this.updateQuestHud()
     this.gameStartMs = performance.now()
-    this.enemyGlobalRamp = 1
     this.spawnInitialEnemies()
-    this.fruitNextSpawnMs = performance.now() + 3000
+    this.fruitNextSpawnMs = performance.now() + 3000 / 3
     this.resetting = false
   }
 
@@ -750,16 +808,12 @@ export class Game {
 
   private updateQuestHud() {
     if (!this.hud) return
-    this.hud.setQuestMultiplier(this.getQuestMultiplier())
 
     // Word of the day is length-specific so the bonus is always achievable.
     this.currentWordOfDay = this.wordOfDayByLength[this.currentQuestLength] ?? ''
     if (this.currentWordOfDay) this.hud.setWordOfDay(this.currentWordOfDay)
 
-    this.hud.setQuestPanel({
-      targetLength: this.currentQuestLength,
-      subtitle: `Spell a valid word with at least ${this.currentQuestLength} letters. Press Space to submit.`,
-    })
+    this.hud.setQuestLengthLine(this.currentQuestLength)
   }
 
   private togglePause(): void {
@@ -778,6 +832,47 @@ export class Game {
     this.gameStartMs += pausedFor
     this.fruitNextSpawnMs += pausedFor
     this.powerModeUntilMs += pausedFor
+    this.speedBoostActiveUntilMs += pausedFor
+  }
+
+  private handleSpeedBoost(nowMs: number, deltaSeconds: number): void {
+    // Pre-run state behaves like paused: no charging before first movement input.
+    if (this.awaitingFirstMove) {
+      this.player.setSpeedMultiplier(1)
+      this.updateSpeedBoostHud(nowMs)
+      return
+    }
+
+    if (this.speedBoostActiveUntilMs > nowMs) {
+      this.player.setSpeedMultiplier(SPEED_BOOST_MULT)
+    } else {
+      this.speedBoostActiveUntilMs = 0
+      this.player.setSpeedMultiplier(1)
+      this.speedBoostChargeProgressMs = Math.min(
+        SPEED_BOOST_CHARGE_MS,
+        this.speedBoostChargeProgressMs + deltaSeconds * 1000,
+      )
+    }
+    this.updateSpeedBoostHud(nowMs)
+  }
+
+  private activateSpeedBoost(nowMs: number): void {
+    if (this.paused || this.awaitingFirstMove) return
+    if (this.speedBoostActiveUntilMs > nowMs) return
+    if (this.speedBoostChargeProgressMs < SPEED_BOOST_CHARGE_MS) return
+    this.speedBoostChargeProgressMs = 0
+    this.speedBoostActiveUntilMs = nowMs + SPEED_BOOST_ACTIVE_MS
+    this.player.setSpeedMultiplier(SPEED_BOOST_MULT)
+    this.updateSpeedBoostHud(nowMs)
+  }
+
+  private updateSpeedBoostHud(nowMs: number): void {
+    if (!this.hud) return
+    const active = this.speedBoostActiveUntilMs > nowMs
+    const ready = !active && this.speedBoostChargeProgressMs >= SPEED_BOOST_CHARGE_MS
+    const progress = active ? 1 : this.speedBoostChargeProgressMs / SPEED_BOOST_CHARGE_MS
+    const remaining = active ? this.speedBoostActiveUntilMs - nowMs : undefined
+    this.hud.setSpeedBoostState(progress, ready, active, remaining)
   }
 
   private hardResetGame(): void {
@@ -795,10 +890,6 @@ export class Game {
     this.shockwaveMesh.visible = true
     this.shockwaveActive = true
     this.shockwaveStartMs = nowMs
-    // Brief slow on all active enemies — reward for spelling under pressure.
-    for (const e of this.enemyPool) {
-      if (e.isActive()) e.applySlowFor(1600, nowMs)
-    }
   }
 
   private updateShockwave(nowMs: number): void {
@@ -819,22 +910,21 @@ export class Game {
   private maybeSpawnFruit(nowMs: number) {
     if (this.fruit.isActive() || nowMs < this.fruitNextSpawnMs) return
     const r = 22
-    const pos = new THREE.Vector2(
+    const raw = new THREE.Vector2(
       THREE.MathUtils.lerp(this.bounds.minX + r, this.bounds.maxX - r, Math.random()),
       THREE.MathUtils.lerp(this.bounds.minY + r, this.bounds.maxY - r, Math.random()),
     )
+    const snapped = this.grid.snapWorldToCell(raw.x, raw.y)
+    const pos = new THREE.Vector2(snapped.world.x, snapped.world.y)
     this.fruit.setActive(true, pos, r)
-    this.fruitNextSpawnMs = nowMs + 14000 + Math.random() * 9000
+    this.fruitNextSpawnMs = nowMs + (14000 + Math.random() * 9000) / 3
   }
 
   private handleFruitCollision(nowMs: number) {
     if (!this.fruit.isActive()) return
-    const pp = this.player.mesh.position
-    const fp = this.fruit.mesh.position
-    const dx = pp.x - fp.x
-    const dy = pp.y - fp.y
-    const r = this.player.getRadius() + this.fruit.getRadius()
-    if (dx * dx + dy * dy > r * r * 0.92) return
+    const playerCell = this.player.getCell()
+    const fruitCell = this.grid.worldToCell(this.fruit.mesh.position.x, this.fruit.mesh.position.y)
+    if (fruitCell.x !== playerCell.x || fruitCell.y !== playerCell.y) return
 
     this.fruit.setActive(false, new THREE.Vector2(0, 0), 22)
     const dur = 10000

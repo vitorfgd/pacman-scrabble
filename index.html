@@ -11,48 +11,61 @@
       <!-- Three.js canvas -->
       <div id="game"></div>
 
-      <!-- HUD -->
-      <div id="hudCorner" aria-label="Game HUD">
-        <!-- Points -->
-        <div id="scoreDisplay">
-          <div class="score-label">SCORE</div>
+      <!-- Shown until first move -->
+      <div id="startInstruction" class="start-instruction" aria-live="polite">
+        <p class="start-instruction-title">Swipe to begin</p>
+      </div>
+      <div id="startSwipeGesture" class="start-swipe-gesture" aria-hidden="true">
+        <span class="start-swipe-trail"></span>
+        <span class="start-swipe-emoji">👇</span>
+      </div>
+
+      <!-- Quest strip: length + letter slots (hidden until collected) -->
+      <div id="questQuestBar" class="quest-quest-bar">
+        <div class="quest-quest-bar-head">
+          <div class="quest-quest-label">QUEST</div>
+          <div id="questLengthLine" class="quest-length-line">3 LETTER WORD</div>
+        </div>
+        <div id="tray" class="tray" aria-label="Collected letters"></div>
+      </div>
+
+      <!-- Score + words found (top-left) -->
+      <div id="statsTopLeft" class="stats-top-left" aria-label="Score and words found">
+        <div class="stat-block">
+          <div class="stat-label">SCORE</div>
           <div id="score" class="score-value">0</div>
         </div>
-
-        <!-- Quest / Word of the Day -->
-        <div id="hudInfo">
-          <div class="hud-row">
-            <span class="hud-label">Quest multiplier</span>
-            <span id="questMult" class="wod"></span>
-          </div>
-          <div class="hud-row">
-            <span class="hud-label">Word of the Day</span>
-            <span id="wod" class="wod"></span>
-          </div>
-          <div class="hud-row hud-muted">
-            <span id="powerMode" class="power-mode"></span>
-          </div>
+        <div class="stat-block">
+          <div class="stat-label">WORDS FOUND</div>
+          <div id="wordsFound" class="words-found-value">0</div>
         </div>
-
-        <!-- Actions (stacked vertically) -->
-        <div id="hudActions" aria-label="Game actions">
-          <button id="resetTray" class="hud-button" type="button">Reset Tray (R)</button>
-          <button id="pauseGame" class="hud-button" type="button">Pause (P)</button>
-          <button id="hardResetGame" class="hud-button hud-button-danger" type="button">Hard Reset (H)</button>
+        <div class="stat-block stat-block-wod">
+          <div class="stat-label">WORD OF THE DAY</div>
+          <div id="wod" class="wod-stat-value">---</div>
         </div>
       </div>
 
-      <!-- Left rail: current quest -->
-      <div class="hud-possible">
-        <div class="hud-label-small">QUEST</div>
-        <div id="questPanel" class="possible-words"></div>
-      </div>
+      <!-- HUD -->
+      <div id="hudCorner" aria-label="Game HUD">
+        <div id="hudPowerMode" class="hud-row hud-muted">
+          <span id="powerMode" class="power-mode"></span>
+        </div>
 
-      <!-- Floating tray — positioned via JS to follow the player -->
-      <div id="tray" class="tray" aria-label="Collected letters"></div>
+        <button id="hudMenuToggle" class="hud-menu-toggle" type="button" aria-label="Open game menu">☰</button>
+        <div id="hudActions" class="hud-actions-menu" aria-label="Game actions">
+          <button id="resetTray" class="hud-button" type="button">Reset Letters</button>
+          <button id="pauseGame" class="hud-button" type="button">Pause</button>
+          <button id="hardResetGame" class="hud-button hud-button-danger" type="button">Restart Run</button>
+        </div>
+      </div>
 
       <!-- Word completion: confetti + praise (filled by JS) -->
       <div id="wordCelebration" class="word-celebration-root" aria-hidden="true"></div>
+      <button id="speedBoostButton" class="speed-boost-button" type="button" aria-label="Speed boost">
+        <span class="speed-boost-label">Speed Boost</span>
+        <span id="speedBoostStatus" class="speed-boost-status">Charging...</span>
+        <span class="speed-boost-bar"><span id="speedBoostFill" class="speed-boost-fill"></span></span>
+      </button>
 
     </div>
     <script type="module" src="/src/main.ts"></script>

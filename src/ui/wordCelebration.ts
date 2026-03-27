@@ -39,6 +39,8 @@ const CONFETTI_COLORS = [
   '#ff9f43',
 ]
 
+const FAIL_PARTICLE_COLORS = ['#ff3b3b', '#ff6b6b', '#ff2e2e', '#ff4d4d']
+
 export type WordCelebrationDetails = {
   letters: string[]
   pointsPerLetter: number
@@ -46,6 +48,13 @@ export type WordCelebrationDetails = {
   totalPoints: number
   questComplete?: boolean
   wordOfDayComplete?: boolean
+}
+
+function getCelebrationTiming(details?: WordCelebrationDetails): { clearMs: number } {
+  const questMode = details?.questComplete === true
+  const wodMode = details?.wordOfDayComplete === true
+  const clearMs = wodMode ? 3600 : questMode ? 2800 : 2200
+  return { clearMs }
 }
 
 /**
@@ -62,7 +71,7 @@ export function playWordCelebration(
   const wodMode = details?.wordOfDayComplete === true
   const count = wodMode ? 180 : questMode ? 110 : 56
   const durScale = wodMode ? 1.65 : questMode ? 1.45 : 1
-  const clearMs = wodMode ? 6400 : questMode ? 5200 : 3800
+  const { clearMs } = getCelebrationTiming(details)
 
   for (let i = 0; i < count; i++) {
     const p = document.createElement('div')
@@ -153,6 +162,45 @@ export function playWordCelebration(
   }, clearMs)
 }
 
+/**
+ * Gather the collected tray letters into center first, then run celebration.
+ */
+export function playWordCelebrationWithGather(
+  container: HTMLElement | null,
+  details: WordCelebrationDetails,
+  sourceRects: DOMRect[],
+): Promise<void> {
+  if (!container) return Promise.resolve()
+
+  container.innerHTML = ''
+  const gatherMs = 620
+  const centerX = window.innerWidth / 2
+  const centerY = window.innerHeight * 0.46
+
+  for (let i = 0; i < sourceRects.length; i++) {
+    const r = sourceRects[i]
+    if (!r) continue
+    const token = document.createElement('div')
+    token.className = 'word-gather-token'
+    token.textContent = (details.letters[i] ?? '').toUpperCase()
+    token.style.left = `${r.left + r.width / 2}px`
+    token.style.top = `${r.top + r.height / 2}px`
+    token.style.setProperty('--dx', `${centerX - (r.left + r.width / 2)}px`)
+    token.style.setProperty('--dy', `${centerY - (r.top + r.height / 2)}px`)
+    token.style.animationDuration = `${gatherMs}ms`
+    token.style.animationDelay = `${Math.min(220, i * 35)}ms`
+    container.appendChild(token)
+  }
+
+  return new Promise((resolve) => {
+    window.setTimeout(() => {
+      playWordCelebration(container, details)
+      const { clearMs } = getCelebrationTiming(details)
+      window.setTimeout(resolve, clearMs)
+    }, gatherMs + 240)
+  })
+}
+
 export function playResetCelebration(
   container: HTMLElement | null,
   title = 'RESET!',
@@ -232,4 +280,91 @@ export function playInfoCelebration(
   window.setTimeout(() => {
     container.innerHTML = ''
   }, clearMs)
+}
+
+let errorAudioCtx: AudioContext | null = null
+
+function playErrorTone(): void {
+  try {
+    errorAudioCtx ??= new AudioContext()
+    const ctx = errorAudioCtx
+    if (ctx.state === 'suspended') void ctx.resume()
+
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+
+    osc.type = 'square'
+    osc.frequency.setValueAtTime(220, ctx.currentTime)
+    osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.16)
+
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18)
+
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.19)
+  } catch {
+    // Audio is best-effort.
+  }
+}
+
+export function playSubmissionFail(
+  container: HTMLElement | null,
+  title = 'INCORRECT',
+  subtitle = 'Word not recognized.',
+): void {
+  if (!container) return
+  container.innerHTML = ''
+
+  // Error sound.
+  playErrorTone()
+
+  // Red fail particles (short, punchy burst).
+  const count = 105
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div')
+    p.className = 'confetti-piece confetti-piece-late'
+
+    const w = 4 + Math.random() * 10
+    const h = 5 + Math.random() * 14
+    const left = Math.random() * 100
+    const delay = Math.random() * 0.08
+    const dur = 0.7 + Math.random() * 0.35
+    const drift = -90 + Math.random() * 180
+
+    p.style.left = `${left}%`
+    p.style.top = `${-2 + Math.random() * 16}%`
+    p.style.width = `${w}px`
+    p.style.height = `${h}px`
+    p.style.setProperty('--drift', `${drift}px`)
+    p.style.backgroundColor = FAIL_PARTICLE_COLORS[Math.floor(Math.random() * FAIL_PARTICLE_COLORS.length)]
+    p.style.animationDelay = `${delay}s`
+    p.style.animationDuration = `${dur}s`
+    p.style.borderRadius = Math.random() > 0.45 ? '2px' : '50%'
+    container.appendChild(p)
+  }
+
+  const stack = document.createElement('div')
+  stack.className = 'word-cele-stack'
+
+  const headline = document.createElement('div')
+  headline.className = 'reset-cele-title'
+  headline.textContent = title
+  stack.appendChild(headline)
+
+  if (subtitle.trim().length > 0) {
+    const sub = document.createElement('div')
+    sub.className = 'reset-cele-subtitle'
+    sub.textContent = subtitle
+    stack.appendChild(sub)
+  }
+
+  container.appendChild(stack)
+
+  window.setTimeout(() => {
+    container.innerHTML = ''
+  }, 2200)
 }
