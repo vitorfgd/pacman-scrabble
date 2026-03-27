@@ -13,21 +13,24 @@
 
       <!-- HUD -->
       <div id="hudCorner" aria-label="Game HUD">
-        <!-- Points -->
-        <div id="scoreDisplay">
-          <div class="score-label">SCORE</div>
-          <div id="score" class="score-value">0</div>
-        </div>
-
-        <!-- Quest / Word of the Day -->
         <div id="hudInfo">
-          <div class="hud-row">
-            <span class="hud-label">Quest multiplier</span>
-            <span id="questMult" class="wod"></span>
+          <div class="hud-row score-hud-row">
+            <span class="score-label">SCORE</span>
+            <div class="score-line">
+              <span id="scoreValue" class="score-value">0</span>
+              <span id="lastRunHint" class="last-run-hint" aria-label="Previous run score"
+                >· last run <span id="lastRunValue">0</span></span
+              >
+            </div>
           </div>
-          <div class="hud-row">
-            <span class="hud-label">Word of the Day</span>
-            <span id="wod" class="wod"></span>
+          <div class="hud-row boost-hud-row" aria-label="Boost energy">
+            <span class="boost-label">BOOST</span>
+            <div class="boost-bar-outer">
+              <div id="boostBarFill" class="boost-bar-fill"></div>
+            </div>
+          </div>
+          <div class="hud-row submit-gate-row">
+            <span id="submitGateStatus" class="submit-gate-status">Enter the rainbow zone below spawn to score</span>
           </div>
           <div class="hud-row hud-muted">
             <span id="powerMode" class="power-mode"></span>
@@ -36,16 +39,19 @@
 
         <!-- Actions (stacked vertically) -->
         <div id="hudActions" aria-label="Game actions">
-          <button id="resetTray" class="hud-button" type="button">Reset Tray (R)</button>
+          <button id="resetTray" class="hud-button" type="button">Drop letters (R)</button>
           <button id="pauseGame" class="hud-button" type="button">Pause (P)</button>
           <button id="hardResetGame" class="hud-button hud-button-danger" type="button">Hard Reset (H)</button>
         </div>
       </div>
 
-      <!-- Left rail: current quest -->
       <div class="hud-possible">
-        <div class="hud-label-small">QUEST</div>
-        <div id="questPanel" class="possible-words"></div>
+        <div class="hud-label-small">SCORING</div>
+        <div class="possible-words hint-block">
+          <p class="hint-line">You only earn points when your head enters the loud rainbow rectangle below the starting point — words submit automatically.</p>
+          <p class="hint-line">Hold Shift to boost using your boost bar (refills slowly, drains quickly while boosting).</p>
+          <p class="hint-line">Some pickups look like letters but are traps — they vanish after a few seconds and respawn elsewhere. Touching one ends your run. Each reset compares to your last run.</p>
+        </div>
       </div>
 
       <!-- Floating tray — positioned via JS to follow the player -->

@@ -203,6 +203,98 @@ export function playResetCelebration(
   }, 3200)
 }
 
+export type WordSequencePop = { word: string; points: number }
+
+export type WordSequenceOptions = {
+  wordOfDayComplete?: boolean
+  staggerMs?: number
+  totalLabel?: string
+}
+
+/**
+ * Rapid one-word-at-a-time popups with light confetti at start.
+ */
+export function playWordSequenceCelebration(
+  container: HTMLElement | null,
+  pops: WordSequencePop[],
+  options?: WordSequenceOptions,
+): void {
+  if (!container || pops.length === 0) return
+
+  const staggerMs = options?.staggerMs ?? 90
+  const wodMode = options?.wordOfDayComplete === true
+  const clearMs = Math.min(9000, 1200 + pops.length * staggerMs + 2200)
+
+  container.innerHTML = ''
+
+  const count = wodMode ? 140 : 70
+  const durScale = wodMode ? 1.4 : 1
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div')
+    p.className = 'confetti-piece'
+    const w = 4 + Math.random() * 10
+    const h = 5 + Math.random() * 14
+    p.style.left = `${Math.random() * 100}%`
+    p.style.top = `${-5 + Math.random() * 22}%`
+    p.style.width = `${w}px`
+    p.style.height = `${h}px`
+    p.style.setProperty('--drift', `${-100 + Math.random() * 200}px`)
+    p.style.backgroundColor = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)]
+    p.style.animationDelay = `${Math.random() * 0.2}s`
+    p.style.animationDuration = `${(1.5 + Math.random() * 0.8) * durScale}s`
+    p.style.borderRadius = Math.random() > 0.5 ? '2px' : '50%'
+    container.appendChild(p)
+  }
+
+  const stack = document.createElement('div')
+  stack.className = 'word-cele-stack word-cele-stack-sequence'
+
+  const praise = document.createElement('div')
+  praise.className = wodMode ? 'word-praise word-praise-wod' : 'word-praise'
+  praise.textContent = wodMode ? 'WORD OF THE DAY!' : 'WORDS!'
+  stack.appendChild(praise)
+
+  const row = document.createElement('div')
+  row.className = 'word-cele-sequence-row'
+
+  pops.forEach((pop, idx) => {
+    window.setTimeout(() => {
+      const line = document.createElement('div')
+      line.className = 'word-cele-pop-line'
+      const wEl = document.createElement('span')
+      wEl.className = 'word-cele-pop-word'
+      wEl.textContent = pop.word.toUpperCase()
+      const pEl = document.createElement('span')
+      pEl.className = 'word-cele-pop-pts'
+      pEl.textContent = ` +${pop.points}`
+      line.appendChild(wEl)
+      line.appendChild(pEl)
+      row.appendChild(line)
+      line.animate(
+        [{ opacity: 0, transform: 'translateY(12px) scale(0.92)' }, { opacity: 1, transform: 'translateY(0) scale(1)' }],
+        { duration: 220, easing: 'cubic-bezier(0.2, 0.9, 0.2, 1)', fill: 'forwards' },
+      )
+    }, idx * staggerMs)
+  })
+
+  stack.appendChild(row)
+
+  if (options?.totalLabel) {
+    window.setTimeout(() => {
+      const total = document.createElement('div')
+      total.className = 'word-cele-total word-cele-total-sequence'
+      total.textContent = options.totalLabel ?? ''
+      stack.appendChild(total)
+    }, pops.length * staggerMs + 80)
+  }
+
+  container.appendChild(stack)
+
+  window.setTimeout(() => {
+    container.innerHTML = ''
+  }, clearMs)
+}
+
 export function playInfoCelebration(
   container: HTMLElement | null,
   title: string,

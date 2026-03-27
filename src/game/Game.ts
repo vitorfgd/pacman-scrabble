@@ -1,16 +1,19 @@
 import * as THREE from 'three'
 import { Player } from './entities/Player'
 import { Enemy } from './entities/Enemy'
-import type { EnemyRole } from './entities/Enemy'
 import { Fruit } from './entities/Fruit'
 import { WordScrambler } from './WordScrambler'
-import { WordSource, anagramSignature } from './WordSource'
-import { WordValidator } from './WordValidator'
-import { getLetterScore, isVowelLetter } from './LetterScoring'
+import { WordSource } from './WordSource'
+import { WordPartitioner } from './WordPartitioner'
+import { SnakeTrail } from './SnakeTrail'
+import { Letter } from './entities/Letter'
+import { isVowelLetter } from './LetterScoring'
 import { Hud } from '../ui/hud'
-import { playInfoCelebration, playResetCelebration, playWordCelebration } from '../ui/wordCelebration'
+import { playInfoCelebration, playResetCelebration, playWordSequenceCelebration } from '../ui/wordCelebration'
 
 export type GameOptions = { container: HTMLElement }
+
+const LAST_RUN_SCORE_STORAGE_KEY = 'pacmanscrabble_last_run_score_v1'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
 type ThemeMode = 'dark' | 'light'
@@ -20,17 +23,13 @@ type ViewportProfile = {
   letterRadius: number
   starterScale: number
   starterSpacing: number
-  enemyCount: number
+  /** Active enemies at game start (more spawn over time up to enemyMaxCount). */
+  enemyStartCount: number
+  enemyMaxCount: number
   enemyBaseRadiusScale: number
   enemyMinSpawnDist: number
   enemyMaxSpawnDist: number
 }
-
-const QUEST_SCHEDULE = [
-  { length: 3, count: 2 },
-  { length: 4, count: 2 },
-  { length: 5, count: 1 },
-] as const
 
 function createGridTexture(gridSizePx = 512, lineEveryPx = 64, themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
@@ -82,8 +81,9 @@ export class Game {
   private player: Player
   private gridPlane: THREE.Mesh
 
-  private readonly mapSize = 6000
-  private bounds: Bounds = { minX: -3000, maxX: 3000, minY: -3000, maxY: 3000 }
+  /** World span (smaller arena = more pressure + shorter chases). */
+  private readonly mapSize = 3600
+  private bounds: Bounds = { minX: -1800, maxX: 1800, minY: -1800, maxY: 1800 }
 
   private readonly raycaster = new THREE.Raycaster()
   private readonly pointerNdc = new THREE.Vector2(0, 0)
@@ -95,20 +95,22 @@ export class Game {
   private hud: Hud | null = null
   private wordSource: WordSource | null = null
   private wordScrambler: WordScrambler | null = null
-  private wordValidator: WordValidator | null = null
-
-  private wordOfDayByLength: Record<number, string> = { 3: '', 4: '', 5: '' }
-  private currentWordOfDay = ''
-
-  private questScheduleIndex = 0
-  private questInPhaseDone = 0
-  private questRandomMode = false
-  private currentQuestLength = 3
+  private wordPartitioner: WordPartitioner | null = null
+  private playerSnakeTrail: SnakeTrail | null = null
+  private playerBodyLetters: Letter[] = []
+  /** Slither-style rings under letter sprites (same segment indices). */
+  private playerBodyRings: THREE.Mesh[] = []
+  private readonly bodyRingPoolSize = 56
 
   private gameStartMs = 0
+  /** Patrol speed multiplier — ramps from min→max over the run. */
   private enemyGlobalRamp = 1
-  private readonly enemyRampMax = 2.2
-  private readonly enemyRampPerSecond = 0.008
+  private readonly enemyRampMin = 0.72
+  private readonly enemyRampMax = 2.65
+  private readonly enemyRampPerSecond = 0.0145
+  /** Ms between spawning one extra enemy until enemyMaxCount. */
+  private enemyNextSpawnMs = 0
+  private readonly enemySpawnIntervalMs = 13500
 
   // HTML tray element — positioned to follow player via world→screen projection
   private trayEl: HTMLDivElement | null = null
@@ -120,6 +122,7 @@ export class Game {
   private enemySpeedScales: number[] = []
   private enemyLastHitMs: number[] = []
   private readonly enemyCollisionCooldownMs = 450
+  private playerSpillImmuneUntilMs = 0
 
   private fruit: Fruit
   private fruitNextSpawnMs = 0
@@ -127,6 +130,45 @@ export class Game {
   // (Tips removed for now)
 
   private score = 0
+  private playerBoostHeld = false
+  /** 0..1 — refills slowly, drains fast while boosting (Shift). */
+  private boostEnergy = 1
+  private readonly boostFillPerSecond = 0.11
+  private readonly boostDrainPerSecond = 0.88
+  /** Single small rectangle below spawn (0,0); entering with your head auto-submits words. */
+  private readonly submitZone: { minX: number; maxX: number; minY: number; maxY: number } = {
+    minX: -52,
+    maxX: 52,
+    minY: -340,
+    maxY: -268,
+  }
+
+  /** Patrol enemies avoid this padded box around the submit gate (world units). */
+  private submitGateAvoidBounds(): Bounds {
+    const pad = 260
+    const z = this.submitZone
+    return {
+      minX: z.minX - pad,
+      maxX: z.maxX + pad,
+      minY: z.minY - pad,
+      maxY: z.maxY + pad,
+    }
+  }
+
+  private static pointInRect(x: number, y: number, r: Bounds): boolean {
+    return x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY
+  }
+  private submitZoneMaterial: THREE.MeshBasicMaterial | null = null
+  /** Canvas texture for the submit gate (redrawn each frame for animation). */
+  private submitGateCanvas: HTMLCanvasElement | null = null
+  private submitGateCtx: CanvasRenderingContext2D | null = null
+  private submitGateTexture: THREE.CanvasTexture | null = null
+  /** Throttle expensive canvas redraws (full redraw every frame was tanking FPS). */
+  private submitGateTexLastDrawMs = 0
+  private submitGateLastInside: boolean | null = null
+  private readonly submitGateRedrawMinMs = 110
+  /** Previous frame: head inside zone (for edge-triggered auto submit). */
+  private submitZoneWasInside = false
 
   private powerModeUntilMs = 0
   private powerModeActive = false
@@ -136,9 +178,6 @@ export class Game {
   private pauseStartedMs = 0
   private wordCelebrationEl: HTMLDivElement | null = null
 
-  // Player velocity — sampled each frame for interceptor enemy AI.
-  private readonly playerPrevPos = new THREE.Vector2(0, 0)
-  private readonly playerVelocity = new THREE.Vector2(0, 0)
 
   // Word-completion shockwave ring.
   private shockwaveMesh: THREE.Mesh | null = null
@@ -151,7 +190,7 @@ export class Game {
   private lastMs = 0
   private initialPlayerSize = 28
   private cameraViewHeightWorld = 1380
-  private readonly cameraFollowSpeed = 4.5
+  private readonly cameraFollowSpeed = 5.2
   private viewportProfile: ViewportProfile = this.computeViewportProfile()
 
   constructor(options: GameOptions) {
@@ -233,10 +272,18 @@ export class Game {
     }, { passive: true })
 
     window.addEventListener('keydown', (ev: KeyboardEvent) => {
-      if (ev.code === 'Space') { ev.preventDefault(); void this.tryCompleteWord() }
       if (ev.code === 'KeyR') this.resetTray()
       if (ev.code === 'KeyP') this.togglePause()
       if (ev.code === 'KeyH') this.hardResetGame()
+      if (ev.code === 'ShiftLeft' || ev.code === 'ShiftRight') {
+        ev.preventDefault()
+        this.playerBoostHeld = true
+      }
+    })
+    window.addEventListener('keyup', (ev: KeyboardEvent) => {
+      if (ev.code === 'ShiftLeft' || ev.code === 'ShiftRight') {
+        this.playerBoostHeld = false
+      }
     })
   }
 
@@ -256,6 +303,7 @@ export class Game {
     this.camera.bottom = -halfY
     this.camera.updateProjectionMatrix()
     this.applyViewportProfileRuntime()
+    this.refreshHudScore()
   }
 
   private isPortraitMode(): boolean {
@@ -269,27 +317,29 @@ export class Game {
     const portrait = this.isPortraitMode()
     if (!portrait) {
       return {
-        cameraViewHeightWorld: 1380,
+        cameraViewHeightWorld: 1280,
         playerSize: 28,
-        letterRadius: 42,
+        letterRadius: 54,
         starterScale: 58,
         starterSpacing: 92,
-        enemyCount: 22,
+        enemyStartCount: 8,
+        enemyMaxCount: 18,
         enemyBaseRadiusScale: 1,
-        enemyMinSpawnDist: 1180,
-        enemyMaxSpawnDist: Math.min(2600, this.mapSize / 2 - 80),
+        enemyMinSpawnDist: Math.round(this.mapSize * 0.2),
+        enemyMaxSpawnDist: Math.min(1580, this.mapSize / 2 - 100),
       }
     }
     return {
-      cameraViewHeightWorld: 1700,
+      cameraViewHeightWorld: 1500,
       playerSize: 34,
-      letterRadius: 56,
+      letterRadius: 70,
       starterScale: 72,
       starterSpacing: 104,
-      enemyCount: 18,
+      enemyStartCount: 6,
+      enemyMaxCount: 15,
       enemyBaseRadiusScale: 0.92,
-      enemyMinSpawnDist: 1320,
-      enemyMaxSpawnDist: Math.min(2550, this.mapSize / 2 - 80),
+      enemyMinSpawnDist: Math.round(this.mapSize * 0.22),
+      enemyMaxSpawnDist: Math.min(1520, this.mapSize / 2 - 100),
     }
   }
 
@@ -319,40 +369,39 @@ export class Game {
 
       // Cache DOM refs
       this.trayEl = document.getElementById('tray') as HTMLDivElement | null
+      if (this.trayEl) this.trayEl.style.display = 'none'
       this.wordCelebrationEl = document.getElementById('wordCelebration') as HTMLDivElement | null
 
       this.wordSource = new WordSource({ topWordCount: 1000 })
-      this.wordValidator = new WordValidator()
-      this.wordOfDayByLength = {
-        3: this.wordSource.getWordOfDay(3, 3),
-        4: this.wordSource.getWordOfDay(4, 4),
-        5: this.wordSource.getWordOfDay(5, 5),
-      }
+      this.wordPartitioner = new WordPartitioner()
       this.hud.setPowerMode(false)
 
-      // Tips removed for now.
-
+      this.playerSnakeTrail = new SnakeTrail(this.viewportProfile.letterRadius * 0.82)
+      this.setupPlayerBodyRings()
+      this.setupSubmitZones()
       this.wordScrambler = new WordScrambler({
         scene: this.scene,
         bounds: this.bounds,
         letterRadius: this.viewportProfile.letterRadius,
-        maxLetters: 300,
+        maxLetters: 240,
         starterScale: this.viewportProfile.starterScale,
         starterSpacing: this.viewportProfile.starterSpacing,
         themeMode: 'dark',
       })
-      this.wordScrambler.initRandomFill(3)
-      const starterWord = this.wordSource.getWordByLength(3)
-      this.wordScrambler.spawnStarterWord(starterWord, new THREE.Vector2(0, 0))
-      this.resetQuestState()
-      this.updateQuestHud()
-
-      this.score = 0
-      this.hud.setScore(0)
-      this.gameStartMs = performance.now()
-      this.enemyGlobalRamp = 1
+      this.wordScrambler.initRandomFill(0)
 
       this.setupEnemyPool()
+      this.score = 0
+      this.boostEnergy = 1
+      this.hud.setScore(0)
+      this.hud.setBoostFill(1)
+      this.hud.setLastRunDisplay(Game.loadLastRunScore())
+      this.resetSubmitZones()
+      const start = performance.now()
+      this.gameStartMs = start
+      this.enemyGlobalRamp = this.enemyRampMin
+      this.enemyNextSpawnMs = start + this.enemySpawnIntervalMs
+
       this.spawnInitialEnemies()
       this.fruitNextSpawnMs = performance.now() + 3500 + Math.random() * 2500
     } catch (err) {
@@ -367,52 +416,322 @@ export class Game {
       this.scene.add(e.mesh)
       e.setActive(false, new THREE.Vector2(0, 0), 10)
       this.enemyPool.push(e)
-      this.enemySpeedScales.push(1.05 + Math.random() * 0.9)
+      this.enemySpeedScales.push(1.22 + Math.random() * 0.95)
       this.enemyLastHitMs.push(0)
     }
   }
 
-  // Role distribution: weighted random (mostly chasers, some interceptors, pins).
-  private pickEnemyRole(index: number): EnemyRole {
-    const r = Math.random()
-    // Slight bias by index so early enemies are simpler (closer spawn = chaser).
-    if (index < 4 || r < 0.45) return 'chaser'
-    if (r < 0.77) return 'interceptor'
-    return 'pin'
+  private setupPlayerBodyRings(): void {
+    const geo = new THREE.CircleGeometry(1, 14)
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x1a66cc,
+      emissive: new THREE.Color(0x1144aa),
+      emissiveIntensity: 0.35,
+      metalness: 0.08,
+      roughness: 0.45,
+    })
+    for (let i = 0; i < this.bodyRingPoolSize; i++) {
+      const m = new THREE.Mesh(geo, mat)
+      m.visible = false
+      m.position.z = 0.45
+      m.renderOrder = -2
+      this.scene.add(m)
+      this.playerBodyRings.push(m)
+    }
+  }
+
+  private static drawSubmitGateRoundedRect(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    rw: number,
+    rh: number,
+    r: number
+  ): void {
+    ctx.beginPath()
+    ctx.moveTo(x + r, y)
+    ctx.arcTo(x + rw, y, x + rw, y + rh, r)
+    ctx.arcTo(x + rw, y + rh, x, y + rh, r)
+    ctx.arcTo(x, y + rh, x, y, r)
+    ctx.arcTo(x, y, x + rw, y, r)
+    ctx.closePath()
+  }
+
+  private ensureSubmitGateCanvas(): void {
+    if (this.submitGateCanvas) return
+    const cw = 256
+    const ch = Math.round((cw * (this.submitZone.maxY - this.submitZone.minY)) / (this.submitZone.maxX - this.submitZone.minX))
+    const canvas = document.createElement('canvas')
+    canvas.width = cw
+    canvas.height = Math.max(120, ch)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 2d')
+    this.submitGateCanvas = canvas
+    this.submitGateCtx = ctx
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.colorSpace = THREE.SRGBColorSpace
+    tex.minFilter = THREE.LinearFilter
+    tex.magFilter = THREE.LinearFilter
+    this.submitGateTexture = tex
+  }
+
+  /**
+   * Rainbow submit gate — kept cheap: no canvas shadowBlur (was killing FPS), few strokes,
+   * small texture (256px wide). Paired with throttled redraw in refreshSubmitZoneMesh.
+   */
+  private drawSubmitGateTexture(nowMs: number, playerInside: boolean): void {
+    this.ensureSubmitGateCanvas()
+    const ctx = this.submitGateCtx!
+    const canvas = this.submitGateCanvas!
+    const w = canvas.width
+    const h = canvas.height
+    const pad = 8
+    const cornerR = 16
+    const rw = w - pad * 2
+    const rh = h - pad * 2
+    const x0 = pad
+    const y0 = pad
+    const t = nowMs * 0.001
+    const hueSpin = (nowMs * 0.0028) % 360
+    const pulse = 0.5 + 0.5 * Math.sin(t * 4)
+
+    ctx.clearRect(0, 0, w, h)
+
+    // Few rainbow rings — stroke only, never shadowBlur (very expensive on 2D canvas).
+    const layers = 4
+    for (let i = layers; i >= 0; i--) {
+      const o = i * 4
+      const hue = (hueSpin + i * 38) % 360
+      const alpha = 0.35 + (i / layers) * 0.45 + (playerInside ? 0.1 : 0)
+      ctx.save()
+      Game.drawSubmitGateRoundedRect(ctx, x0 - o, y0 - o, rw + o * 2, rh + o * 2, cornerR + o * 0.4)
+      ctx.strokeStyle = `hsla(${hue}, 100%, 58%, ${alpha * (0.8 + pulse * 0.2)})`
+      ctx.lineWidth = 2 + i * 0.5
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    ctx.save()
+    Game.drawSubmitGateRoundedRect(ctx, x0, y0, rw, rh, cornerR)
+    ctx.fillStyle = 'rgba(8, 4, 18, 0.96)'
+    ctx.fill()
+    ctx.restore()
+
+    ctx.save()
+    Game.drawSubmitGateRoundedRect(ctx, x0 + 2, y0 + 2, rw - 4, rh - 4, Math.max(6, cornerR - 3))
+    ctx.clip()
+
+    const cx = x0 + rw * 0.5
+    const cy = y0 + rh * 0.45
+    const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(rw, rh) * 0.9)
+    rg.addColorStop(0, playerInside ? 'rgba(255, 60, 200, 0.28)' : 'rgba(80, 120, 255, 0.08)')
+    rg.addColorStop(1, 'rgba(0, 0, 0, 0.4)')
+    ctx.fillStyle = rg
+    ctx.fillRect(x0, y0, rw, rh)
+
+    const wash = ctx.createLinearGradient(x0, y0, x0 + rw, y0 + rh)
+    for (let s = 0; s <= 6; s++) {
+      const hueW = (hueSpin + s * 50) % 360
+      wash.addColorStop(s / 6, `hsla(${hueW}, 90%, 52%, ${0.05 + (playerInside ? 0.1 : 0)})`)
+    }
+    ctx.fillStyle = wash
+    ctx.globalCompositeOperation = 'screen'
+    ctx.fillRect(x0, y0, rw, rh)
+    ctx.globalCompositeOperation = 'source-over'
+
+    ctx.restore()
+
+    for (let ring = 0; ring < 2; ring++) {
+      const inset = 4 + ring * 2
+      const hue = (hueSpin + ring * 70 + 140) % 360
+      Game.drawSubmitGateRoundedRect(ctx, x0 + inset, y0 + inset, rw - inset * 2, rh - inset * 2, Math.max(5, cornerR - inset))
+      ctx.strokeStyle = `hsla(${hue}, 100%, 62%, ${0.55 - ring * 0.12})`
+      ctx.lineWidth = 1.8 - ring * 0.35
+      ctx.stroke()
+    }
+
+    const seed = Math.floor(nowMs / 120)
+    for (let k = 0; k < 8; k++) {
+      const sx = x0 + ((Math.sin(seed * 0.1 + k * 3.7) * 0.5 + 0.5) * rw * 0.85 + rw * 0.075)
+      const sy = y0 + ((Math.cos(seed * 0.13 + k * 2.9) * 0.5 + 0.5) * rh * 0.85 + rh * 0.075)
+      const hue = (hueSpin + k * 41) % 360
+      ctx.beginPath()
+      ctx.arc(sx, sy, 1.2 + (k % 2) * 0.35, 0, Math.PI * 2)
+      ctx.fillStyle = `hsla(${hue}, 100%, 68%, ${0.4 + pulse * 0.3})`
+      ctx.fill()
+    }
+
+    const titleSize = Math.max(13, Math.floor(h * 0.19))
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const tx = w * 0.5
+    const tyTitle = h * 0.4
+    ctx.font = `900 ${titleSize}px system-ui, "Segoe UI", sans-serif`
+    ctx.lineWidth = 3
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)'
+    ctx.strokeText('SUBMIT', tx, tyTitle)
+    const tg = ctx.createLinearGradient(tx - w * 0.45, tyTitle - titleSize, tx + w * 0.45, tyTitle + titleSize)
+    for (let i = 0; i <= 5; i++) {
+      tg.addColorStop(i / 5, `hsl(${((hueSpin + i * 58) % 360)}, 100%, 62%)`)
+    }
+    ctx.fillStyle = tg
+    ctx.fillText('SUBMIT', tx, tyTitle)
+
+    const subSize = Math.max(8, Math.floor(h * 0.078))
+    ctx.font = `800 ${subSize}px system-ui, "Segoe UI", sans-serif`
+    const tySub = h * 0.6
+    ctx.lineWidth = 2
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'
+    ctx.strokeText('AUTO SCORE ZONE', tx, tySub)
+    const sg2 = ctx.createLinearGradient(tx - w * 0.4, tySub - subSize, tx + w * 0.4, tySub + subSize)
+    for (let i = 0; i <= 4; i++) {
+      sg2.addColorStop(i / 4, `hsl(${((hueSpin + 100 + i * 60) % 360)}, 92%, 76%)`)
+    }
+    ctx.fillStyle = sg2
+    ctx.fillText('AUTO SCORE ZONE', tx, tySub)
+
+    this.submitGateTexture!.needsUpdate = true
+  }
+
+  private setupSubmitZones(): void {
+    const z = this.submitZone
+    const w = z.maxX - z.minX
+    const h = z.maxY - z.minY
+    const geo = new THREE.PlaneGeometry(w, h)
+    this.ensureSubmitGateCanvas()
+    this.drawSubmitGateTexture(0, false)
+    const map = this.submitGateTexture!
+    const mat = new THREE.MeshBasicMaterial({
+      map,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      depthTest: true,
+    })
+    const mesh = new THREE.Mesh(geo, mat)
+    mesh.position.set((z.minX + z.maxX) * 0.5, (z.minY + z.maxY) * 0.5, 0.52)
+    mesh.renderOrder = 4
+    this.scene.add(mesh)
+    this.submitZoneMaterial = mat
+  }
+
+  private resetSubmitZones(): void {
+    this.submitZoneWasInside = false
+    this.submitGateLastInside = null
+    this.submitGateTexLastDrawMs = 0
+    this.hud?.setSubmitZoneInside(false)
+    this.refreshSubmitZoneMesh(performance.now(), false)
+  }
+
+  /** Circle (player head) overlaps axis-aligned rectangle. */
+  private static circleIntersectsRect(cx: number, cy: number, r: number, rect: { minX: number; maxX: number; minY: number; maxY: number }): boolean {
+    const nx = THREE.MathUtils.clamp(cx, rect.minX, rect.maxX)
+    const ny = THREE.MathUtils.clamp(cy, rect.minY, rect.maxY)
+    const dx = cx - nx
+    const dy = cy - ny
+    return dx * dx + dy * dy <= r * r
+  }
+
+  private updateSubmitZones(nowMs: number): void {
+    const px = this.player.mesh.position.x
+    const py = this.player.mesh.position.y
+    const pr = this.player.getRadius()
+    const inside = Game.circleIntersectsRect(px, py, pr, this.submitZone)
+    this.hud?.setSubmitZoneInside(inside)
+
+    if (
+      inside &&
+      !this.submitZoneWasInside &&
+      !this.wordCompletionInFlight &&
+      !this.paused &&
+      this.tray.length > 0
+    ) {
+      void this.tryAutoSubmitFromZone()
+    }
+    this.submitZoneWasInside = inside
+    this.refreshSubmitZoneMesh(nowMs, inside)
+  }
+
+  private refreshSubmitZoneMesh(nowMs: number, playerInside: boolean): void {
+    const mat = this.submitZoneMaterial
+    if (!mat) return
+    const insideChanged = this.submitGateLastInside !== playerInside
+    const due = nowMs - this.submitGateTexLastDrawMs >= this.submitGateRedrawMinMs
+    if (insideChanged || due) {
+      this.drawSubmitGateTexture(nowMs, playerInside)
+      this.submitGateTexLastDrawMs = nowMs
+      this.submitGateLastInside = playerInside
+    }
+    const pulse = 0.035 * Math.sin(nowMs * 0.0038)
+    mat.opacity = playerInside
+      ? THREE.MathUtils.clamp(0.97 + pulse, 0.9, 1)
+      : THREE.MathUtils.clamp(0.86 + pulse * 0.55, 0.78, 0.94)
+  }
+
+  private placeEnemySpawnPosition(out: THREE.Vector2, baseRadius: number): void {
+    const minSpawnDist = this.viewportProfile.enemyMinSpawnDist
+    const maxSpawnDist = this.viewportProfile.enemyMaxSpawnDist
+    const margin = baseRadius * 2
+    const avoid = this.submitGateAvoidBounds()
+    for (let attempt = 0; attempt < 70; attempt++) {
+      const angle = Math.random() * Math.PI * 2
+      const dist = minSpawnDist + Math.random() * (maxSpawnDist - minSpawnDist)
+      out.set(Math.cos(angle) * dist, Math.sin(angle) * dist)
+      if (
+        out.x >= this.bounds.minX + margin &&
+        out.x <= this.bounds.maxX - margin &&
+        out.y >= this.bounds.minY + margin &&
+        out.y <= this.bounds.maxY - margin &&
+        !Game.pointInRect(out.x, out.y, avoid)
+      ) {
+        return
+      }
+    }
+    for (let attempt = 0; attempt < 40; attempt++) {
+      out.set(
+        THREE.MathUtils.lerp(this.bounds.minX + margin, this.bounds.maxX - margin, Math.random()),
+        THREE.MathUtils.lerp(this.bounds.minY + margin, this.bounds.maxY - margin, Math.random()),
+      )
+      if (!Game.pointInRect(out.x, out.y, avoid)) {
+        return
+      }
+    }
+    out.set(this.bounds.minX + margin + 80, this.bounds.maxY - margin - 80)
+  }
+
+  private spawnEnemyAtIndex(i: number): void {
+    const r = (18 + Math.random() * 20) * this.viewportProfile.enemyBaseRadiusScale
+    const tmp = new THREE.Vector2()
+    this.placeEnemySpawnPosition(tmp, r)
+    const enemy = this.enemyPool[i]
+    enemy.setActive(true, tmp, r)
+    enemy.setPatrolBounds(this.bounds, this.submitGateAvoidBounds())
   }
 
   private spawnInitialEnemies() {
-    const count = this.viewportProfile.enemyCount
     const tmp = new THREE.Vector2()
-    // Keep spawns outside this ring so the player can grab the starter word first.
-    const minSpawnDist = this.viewportProfile.enemyMinSpawnDist
-    const maxSpawnDist = this.viewportProfile.enemyMaxSpawnDist
     for (const e of this.enemyPool) e.setActive(false, tmp, 10)
-    for (let i = 0; i < count; i++) {
-      const r = (18 + Math.random() * 20) * this.viewportProfile.enemyBaseRadiusScale
-      const margin = r * 2
-      let placed = false
-      for (let attempt = 0; attempt < 55; attempt++) {
-        const angle = Math.random() * Math.PI * 2
-        const dist = minSpawnDist + Math.random() * (maxSpawnDist - minSpawnDist)
-        tmp.set(Math.cos(angle) * dist, Math.sin(angle) * dist)
-        if (
-          tmp.x >= this.bounds.minX + margin &&
-          tmp.x <= this.bounds.maxX - margin &&
-          tmp.y >= this.bounds.minY + margin &&
-          tmp.y <= this.bounds.maxY - margin
-        ) {
-          placed = true
-          break
-        }
+    const start = this.viewportProfile.enemyStartCount
+    for (let i = 0; i < start; i++) {
+      this.spawnEnemyAtIndex(i)
+    }
+  }
+
+  /** Every interval, add one enemy until we reach enemyMaxCount. */
+  private maybeSpawnExtraEnemy(nowMs: number): void {
+    if (nowMs < this.enemyNextSpawnMs) return
+    const max = this.viewportProfile.enemyMaxCount
+    let active = 0
+    for (const e of this.enemyPool) {
+      if (e.isActive()) active++
+    }
+    if (active >= max) return
+    for (let i = 0; i < this.enemyPool.length; i++) {
+      if (!this.enemyPool[i].isActive()) {
+        this.spawnEnemyAtIndex(i)
+        this.enemyNextSpawnMs = nowMs + this.enemySpawnIntervalMs
+        return
       }
-      if (!placed) {
-        const angle = Math.random() * Math.PI * 2
-        tmp.set(Math.cos(angle) * minSpawnDist, Math.sin(angle) * minSpawnDist)
-        tmp.x = THREE.MathUtils.clamp(tmp.x, this.bounds.minX + margin, this.bounds.maxX - margin)
-        tmp.y = THREE.MathUtils.clamp(tmp.y, this.bounds.minY + margin, this.bounds.maxY - margin)
-      }
-      this.enemyPool[i].setActive(true, tmp, r, this.pickEnemyRole(i))
     }
   }
 
@@ -430,26 +749,25 @@ export class Game {
     if (this.paused) return
     if (!this.resetting && this.gameStartMs > 0) {
       const t = (nowMs - this.gameStartMs) / 1000
-      this.enemyGlobalRamp = Math.min(this.enemyRampMax, 1 + t * this.enemyRampPerSecond)
+      this.enemyGlobalRamp = Math.min(
+        this.enemyRampMax,
+        this.enemyRampMin + t * this.enemyRampPerSecond,
+      )
     }
 
     this.updateCamera(deltaSeconds)
     this.recomputePointerWorld()
-    this.player.update(deltaSeconds, { pointerWorld: this.pointerWorld, bounds: this.bounds })
+    const speedMult = this.applyPlayerBoost(deltaSeconds)
+    this.player.update(deltaSeconds, {
+      pointerWorld: this.pointerWorld,
+      bounds: this.bounds,
+      speedMultiplier: speedMult,
+    })
 
-    // Sample player velocity for interceptor AI.
-    const pp = this.player.mesh.position
-    this.playerVelocity.set(
-      (pp.x - this.playerPrevPos.x) / Math.max(0.001, deltaSeconds),
-      (pp.y - this.playerPrevPos.y) / Math.max(0.001, deltaSeconds),
-    )
-    this.playerPrevPos.set(pp.x, pp.y)
-
-    // Move HTML tray to follow player on screen
     this.updateTrayPosition()
     this.updateShockwave(nowMs)
 
-    if (!this.wordScrambler || !this.hud || !this.wordSource || !this.wordValidator) return
+    if (!this.wordScrambler || !this.hud || !this.wordSource || !this.wordPartitioner) return
     if (this.resetting) return
 
     this.handlePowerMode(nowMs)
@@ -457,9 +775,12 @@ export class Game {
     if (!this.wordCompletionInFlight) {
       this.handleLetterCollisions()
     }
-
     this.wordScrambler?.updateStarterLetters(nowMs)
+    this.updateSubmitZones(nowMs)
+    this.maybeSpawnExtraEnemy(nowMs)
     this.updateEnemies(deltaSeconds, nowMs)
+    this.syncPlayerSnakeTrail()
+    this.checkSnakeInteractions(nowMs)
     this.maybeSpawnFruit(nowMs)
     this.fruit.update(nowMs)
     this.handleFruitCollision(nowMs)
@@ -469,7 +790,9 @@ export class Game {
 
   private updateCamera(deltaSeconds: number) {
     const aspect = this.container.clientWidth / Math.max(1, this.container.clientHeight)
-    const halfY = this.cameraViewHeightWorld / 2
+    // Slither.io–style: pull back slightly as your tail grows so you see more of the arena.
+    const tailZoom = 1 + Math.min(0.4, this.tray.length * 0.013)
+    const halfY = (this.cameraViewHeightWorld * tailZoom) / 2
     const halfX = halfY * aspect
 
     const targetX = THREE.MathUtils.clamp(this.player.mesh.position.x, this.bounds.minX + halfX, this.bounds.maxX - halfX)
@@ -542,117 +865,175 @@ export class Game {
     const playerPos = this.player.mesh.position
     const playerRadius = this.player.getRadius()
     let changed = false
-    for (const letter of this.wordScrambler.getActiveLetters()) {
+    for (const letter of this.wordScrambler.getPickupLetters()) {
       const dx = playerPos.x - letter.sprite.position.x
       const dy = playerPos.y - letter.sprite.position.y
-      const r = playerRadius + letter.radius
+      const r = playerRadius + letter.radius * 0.82
       if (dx * dx + dy * dy <= r * r * 0.85) {
         this.tray.push(letter.char)
-        letter.setActive(false)
         this.wordScrambler.spawnReplacementLetter()
+        this.wordScrambler.promoteFieldLetterToBody(letter)
+        this.playerBodyLetters.push(letter)
         changed = true
       }
     }
     if (changed) {
       this.updateTrayContent()
-      this.updateQuestHud()
+    }
+  }
+
+  private applyPlayerBoost(deltaSeconds: number): number {
+    if (!this.hud) return 1
+    if (this.playerBoostHeld && this.boostEnergy > 0) {
+      this.boostEnergy = Math.max(0, this.boostEnergy - this.boostDrainPerSecond * deltaSeconds)
+      this.hud.setBoostFill(this.boostEnergy)
+      return 1.72
+    }
+    this.boostEnergy = Math.min(1, this.boostEnergy + this.boostFillPerSecond * deltaSeconds)
+    this.hud.setBoostFill(this.boostEnergy)
+    return 1
+  }
+
+  private refreshHudScore(): void {
+    this.hud?.setScore(this.score)
+  }
+
+  private static loadLastRunScore(): number {
+    try {
+      const v = localStorage.getItem(LAST_RUN_SCORE_STORAGE_KEY)
+      if (v == null) return 0
+      const n = parseInt(v, 10)
+      return Number.isFinite(n) ? Math.max(0, n) : 0
+    } catch {
+      return 0
+    }
+  }
+
+  private static saveLastRunScore(score: number): void {
+    try {
+      localStorage.setItem(LAST_RUN_SCORE_STORAGE_KEY, String(Math.round(score)))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  private static runEndedSubtitle(finalScore: number, prevRun: number): string {
+    if (prevRun <= 0 && finalScore <= 0) {
+      return 'Collect letters and submit in the rainbow zone to score.'
+    }
+    if (prevRun <= 0) {
+      return `This run: ${finalScore.toLocaleString()} — nothing to compare yet (first recorded run).`
+    }
+    const delta = finalScore - prevRun
+    if (delta > 0) {
+      return `This run: ${finalScore.toLocaleString()} — up from ${prevRun.toLocaleString()} (+${delta.toLocaleString()}).`
+    }
+    if (delta < 0) {
+      return `This run: ${finalScore.toLocaleString()} — last run was ${prevRun.toLocaleString()} (${delta.toLocaleString()}).`
+    }
+    return `This run: ${finalScore.toLocaleString()} — tied last run (${prevRun.toLocaleString()}).`
+  }
+
+  private syncPlayerSnakeTrail(): void {
+    if (!this.playerSnakeTrail) return
+    const head = new THREE.Vector2(this.player.mesh.position.x, this.player.mesh.position.y)
+    this.playerSnakeTrail.pushHead(head)
+    for (let i = 0; i < this.playerBodyLetters.length; i++) {
+      const p = this.playerSnakeTrail.getSegmentPosition(i, head)
+      this.playerBodyLetters[i].sprite.position.set(p.x, p.y, 1)
+      if (i < this.playerBodyRings.length) {
+        const ring = this.playerBodyRings[i]
+        ring.visible = true
+        ring.position.set(p.x, p.y, 0.45)
+        const r = this.playerBodyLetters[i].radius * 0.94
+        ring.scale.setScalar(r)
+      }
+    }
+    for (let i = this.playerBodyLetters.length; i < this.playerBodyRings.length; i++) {
+      this.playerBodyRings[i].visible = false
+    }
+  }
+
+  /** Enemy head touches player tail (or body): full game reset for the player. */
+  private checkSnakeInteractions(nowMs: number): void {
+    if (this.wordCompletionInFlight || !this.wordScrambler) return
+    if (nowMs < this.playerSpillImmuneUntilMs) return
+
+    for (let i = 0; i < this.enemyPool.length; i++) {
+      const enemy = this.enemyPool[i]
+      if (!enemy.isActive()) continue
+      const ep = enemy.mesh.position
+      const er = enemy.getRadius() * 0.9
+      for (let j = 0; j < this.playerBodyLetters.length; j++) {
+        const seg = this.playerBodyLetters[j].sprite.position
+        const dx = ep.x - seg.x
+        const dy = ep.y - seg.y
+        const rr = er + this.playerBodyLetters[j].radius * 0.72
+        if (dx * dx + dy * dy <= rr * rr) {
+          this.playerSpillImmuneUntilMs = nowMs + 950
+          this.requestReset()
+          return
+        }
+      }
     }
   }
 
   // ── Word completion ───────────────────────────────────────────────────────
 
-  private async tryCompleteWord() {
-    if (!this.wordValidator || this.wordCompletionInFlight || !this.tray.length) return
+  private async tryAutoSubmitFromZone(): Promise<void> {
+    if (!this.wordPartitioner || this.wordCompletionInFlight || !this.tray.length) return
     if (this.paused) return
-    if (this.tray.length < this.currentQuestLength) return
-    const joined = this.tray.join('').toLowerCase()
-    if (!this.wordValidator.isValidMultiset(joined)) {
-      this.handleInvalidSubmission()
+    const partition = this.wordPartitioner.greedyPartition(this.tray)
+    if (partition.words.length === 0) {
+      playInfoCelebration(this.wordCelebrationEl, 'NO WORDS', 'Nothing spellable from these letters.', 1500)
       return
     }
-    await this.completeWord(joined)
+    await this.completePartition(partition)
   }
 
-  private handleInvalidSubmission(): void {
-    if (!this.wordScrambler) return
-    const returned = [...this.tray]
-    this.tray = []
-    this.updateTrayContent()
-    if (returned.length > 0) this.wordScrambler.spawnLettersFromTray(returned)
-    playInfoCelebration(this.wordCelebrationEl, 'NOT A WORD', 'Tray reset. No points lost.', 1600)
+  /** Longer tail at submit time → much larger score multiplier (risk vs reward). */
+  private tailLengthMultiplier(tailLen: number): number {
+    if (tailLen <= 0) return 1
+    const a = 0.016
+    const p = 1.82
+    return Math.min(180, 1 + a * tailLen ** p)
   }
 
-  private getQuestMultiplier(): number {
-    if (this.questRandomMode) return 2.5
-    return 1.2 + this.questScheduleIndex * 0.35
+  private partitionPoints(
+    partition: { words: { word: string; points: number }[]; totalPoints: number },
+    tailLen: number,
+  ): number {
+    const base = Math.round(partition.totalPoints)
+    return Math.round(base * this.tailLengthMultiplier(tailLen))
   }
 
-  private resetQuestState(): void {
-    this.questScheduleIndex = 0
-    this.questInPhaseDone = 0
-    this.questRandomMode = false
-    this.currentQuestLength = QUEST_SCHEDULE[0].length
-  }
-
-  private advanceQuestAfterCompletion(): void {
-    if (this.questRandomMode) {
-      this.currentQuestLength = [3, 4, 5][Math.floor(Math.random() * 3)]
-      return
-    }
-    const ph = QUEST_SCHEDULE[this.questScheduleIndex]
-    this.questInPhaseDone++
-    if (this.questInPhaseDone >= ph.count) {
-      this.questScheduleIndex++
-      this.questInPhaseDone = 0
-      if (this.questScheduleIndex >= QUEST_SCHEDULE.length) {
-        this.questRandomMode = true
-        this.currentQuestLength = [3, 4, 5][Math.floor(Math.random() * 3)]
-        return
-      }
-    }
-    this.currentQuestLength = QUEST_SCHEDULE[this.questScheduleIndex].length
-  }
-
-  private async completeWord(word: string) {
+  private async completePartition(partition: { words: { word: string; points: number }[]; totalPoints: number }) {
     if (!this.wordScrambler || !this.hud || this.wordCompletionInFlight) return
     this.wordCompletionInFlight = true
     try {
-      const questMult = this.getQuestMultiplier()
-      const letters = word.toLowerCase().split('')
+      const tailLen = this.tray.length
 
-      const perLetterPoints = letters.map((ch) => getLetterScore(ch))
-      const basePoints = perLetterPoints.reduce((a, b) => a + b, 0)
-
-      let pts = Math.round(basePoints * questMult)
-      let grow = pts * 0.006
-
-      const wodWord = this.currentWordOfDay
-      const isWordOfDay =
-        wodWord.length > 0 && anagramSignature(word) === anagramSignature(wodWord)
-
-      if (isWordOfDay) {
-        // Massive bonus for the daily target.
-        pts = Math.round(pts * 8 + 600)
-        grow = grow * 1.25 + 8
-        this.player.setWordOfDayGlow(true, performance.now())
-      }
-
-      this.player.setSize(this.player.getRadius() + grow)
-      this.score += pts
-      this.hud?.setScore(this.score)
-      this.triggerWordShockwave(performance.now())
-      this.advanceQuestAfterCompletion()
-      this.updateQuestHud()
-      playWordCelebration(this.wordCelebrationEl, {
-        letters,
-        pointsPerLetter: Math.max(1, Math.round(pts / Math.max(1, letters.length))),
-        perLetterPoints,
-        totalPoints: pts,
-        questComplete: true,
-        wordOfDayComplete: isWordOfDay,
-      })
+      const pts = this.partitionPoints(partition, tailLen)
 
       this.tray = []
+      for (const L of this.playerBodyLetters) this.wordScrambler.releaseBodyLetter(L)
+      this.playerBodyLetters = []
+      this.playerSnakeTrail?.reset()
+      for (const r of this.playerBodyRings) r.visible = false
+      this.player.setSize(this.initialPlayerSize)
+
+      this.score += pts
+      this.refreshHudScore()
+      this.triggerWordShockwave(performance.now())
+
+      const pops = partition.words.map((w) => ({
+        word: w.word,
+        points: Math.round(w.points),
+      }))
+      playWordSequenceCelebration(this.wordCelebrationEl, pops, {
+        staggerMs: 92,
+        totalLabel: `TOTAL +${pts.toLocaleString()}`,
+      })
       this.updateTrayContent()
     } finally {
       this.wordCompletionInFlight = false
@@ -673,15 +1054,19 @@ export class Game {
       const pr = this.player.getRadius()
       tmpPP.set(pp.x, pp.y)
 
-      const dx = pp.x - enemy.mesh.position.x
-      const dy = pp.y - enemy.mesh.position.y
-      const dSq = dx * dx + dy * dy
-      const chaseR = 1100
-      const speedScale = this.enemySpeedScales[i] * this.enemyGlobalRamp
-      enemy.update(deltaSeconds, tmpPP, this.playerVelocity, this.bounds, speedScale, dSq <= chaseR * chaseR, nowMs, this.powerModeActive)
+      const bx = enemy.mesh.position.x
+      const by = enemy.mesh.position.y
 
-      const r = pr + enemy.getRadius()
-      if (dSq > r * r * 0.92) continue
+      const dx = pp.x - bx
+      const dy = pp.y - by
+      const dSq = dx * dx + dy * dy
+
+      const fleeMode = this.powerModeActive
+      const speedScale = this.enemySpeedScales[i] * this.enemyGlobalRamp
+      enemy.update(deltaSeconds, tmpPP, this.bounds, speedScale, nowMs, fleeMode)
+
+      const rHit = pr + enemy.getRadius()
+      if (dSq > rHit * rHit * 0.92) continue
       if (nowMs - this.enemyLastHitMs[i] < this.enemyCollisionCooldownMs) continue
       this.enemyLastHitMs[i] = nowMs
 
@@ -705,10 +1090,14 @@ export class Game {
     }
     const returned = [...this.tray]
     this.tray = []
+    for (const L of this.playerBodyLetters) this.wordScrambler.releaseBodyLetter(L)
+    this.playerBodyLetters = []
+    this.playerSnakeTrail?.reset()
+    for (const r of this.playerBodyRings) r.visible = false
+    this.player.setSize(this.initialPlayerSize)
     this.updateTrayContent()
     if (returned.length > 0) {
       this.wordScrambler.spawnLettersFromTray(returned)
-      this.updateQuestHud()
     }
   }
 
@@ -720,12 +1109,21 @@ export class Game {
     this.powerModeActive = false
     this.hud?.setPowerMode(false)
 
+    const prevRun = Game.loadLastRunScore()
+    const finalScore = this.score
+    Game.saveLastRunScore(finalScore)
+    this.hud?.setLastRunDisplay(finalScore)
+
     playResetCelebration(
       this.wordCelebrationEl,
-      'OUCH! RESET!',
-      `Quest target: at least ${this.currentQuestLength} letters. Spell to grow.`,
+      'RUN ENDED',
+      Game.runEndedSubtitle(finalScore, prevRun),
     )
     this.tray = []
+    for (const L of this.playerBodyLetters) this.wordScrambler?.releaseBodyLetter(L)
+    this.playerBodyLetters = []
+    this.playerSnakeTrail?.reset()
+    for (const r of this.playerBodyRings) r.visible = false
     this.updateTrayContent()
     this.player.setSize(this.initialPlayerSize)
     this.player.mesh.position.set(0, 0, 1)
@@ -736,31 +1134,20 @@ export class Game {
     if (this.shockwaveMesh) { this.shockwaveMesh.visible = false; this.shockwaveActive = false }
 
     this.score = 0
+    this.boostEnergy = 1
     this.hud?.setScore(0)
-    this.resetQuestState()
-    this.updateQuestHud()
-    this.gameStartMs = performance.now()
-    this.enemyGlobalRamp = 1
+    this.hud?.setBoostFill(1)
+    this.resetSubmitZones()
+    const now = performance.now()
+    this.gameStartMs = now
+    this.enemyGlobalRamp = this.enemyRampMin
+    this.enemyNextSpawnMs = now + this.enemySpawnIntervalMs
     this.spawnInitialEnemies()
-    this.fruitNextSpawnMs = performance.now() + 3000
+    this.fruitNextSpawnMs = now + 3000
     this.resetting = false
   }
 
   // ── HUD helpers ───────────────────────────────────────────────────────────
-
-  private updateQuestHud() {
-    if (!this.hud) return
-    this.hud.setQuestMultiplier(this.getQuestMultiplier())
-
-    // Word of the day is length-specific so the bonus is always achievable.
-    this.currentWordOfDay = this.wordOfDayByLength[this.currentQuestLength] ?? ''
-    if (this.currentWordOfDay) this.hud.setWordOfDay(this.currentWordOfDay)
-
-    this.hud.setQuestPanel({
-      targetLength: this.currentQuestLength,
-      subtitle: `Spell a valid word with at least ${this.currentQuestLength} letters. Press Space to submit.`,
-    })
-  }
 
   private togglePause(): void {
     this.paused = !this.paused
@@ -777,13 +1164,13 @@ export class Game {
     this.lastMs = now
     this.gameStartMs += pausedFor
     this.fruitNextSpawnMs += pausedFor
+    this.enemyNextSpawnMs += pausedFor
     this.powerModeUntilMs += pausedFor
   }
 
   private hardResetGame(): void {
     if (this.paused) this.togglePause()
     this.requestReset()
-    playInfoCelebration(this.wordCelebrationEl, 'HARD RESET', 'Everything restarted.', 1700)
   }
 
   // ── Word shockwave ────────────────────────────────────────────────────────

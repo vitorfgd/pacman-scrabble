@@ -3,7 +3,7 @@ import { Letter } from './entities/Letter'
 import { isVowelLetter } from './LetterScoring'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
-type ThemeMode = 'dark' | 'light'
+export type ThemeMode = 'dark' | 'light'
 
 function shuffleInPlace<T>(arr: T[]): void {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -19,10 +19,18 @@ function pickWeightedLetter(): string {
   return FREQ_CHARS[Math.floor(Math.random() * FREQ_CHARS.length)] ?? 'e'
 }
 
-function makeLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
+/** Same distribution as field letter spawns — for decoys (e.g. bombs). */
+export function pickRandomFieldLetter(): string {
+  return pickWeightedLetter()
+}
+
+/**
+ * Rounded-square tile for field letters (reads clearly at larger world scale).
+ */
+export function makeFieldLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
-  canvas.width = 192
-  canvas.height = 192
+  canvas.width = 256
+  canvas.height = 256
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Failed to create canvas context for letter texture')
 
@@ -36,26 +44,32 @@ function makeLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
   const letterFill = isDark ? 'rgba(255,255,255,0.98)' : 'rgba(27, 31, 48, 0.96)'
   const letterStroke = isDark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.7)'
 
+  const pad = 12
+  const rw = canvas.width - pad * 2
+  const rh = canvas.height - pad * 2
+  const corner = 26
   ctx.beginPath()
-  ctx.arc(96, 96, 76, 0, Math.PI * 2)
+  ctx.roundRect(pad, pad, rw, rh, corner)
   ctx.fillStyle = baseFill
   ctx.fill()
-  ctx.lineWidth = 6
+  ctx.lineWidth = 7
   ctx.strokeStyle = baseStroke
   ctx.stroke()
 
+  const cx = canvas.width / 2
+  const cy = canvas.height / 2 + 6
   ctx.shadowColor = shadowColor
-  ctx.shadowBlur = 10
+  ctx.shadowBlur = 12
   ctx.fillStyle = letterFill
-  ctx.font = 'bold 128px system-ui, Segoe UI, Roboto, sans-serif'
+  ctx.font = 'bold 168px system-ui, Segoe UI, Roboto, sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.fillText(char.toUpperCase(), 96, 104)
+  ctx.fillText(char.toUpperCase(), cx, cy)
 
   ctx.shadowBlur = 0
   ctx.strokeStyle = letterStroke
   ctx.lineWidth = 12
-  ctx.strokeText(char.toUpperCase(), 96, 104)
+  ctx.strokeText(char.toUpperCase(), cx, cy)
 
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
@@ -73,7 +87,7 @@ export class WordScrambler {
   private readonly bounds: Bounds
 
   private readonly letterRadius: number
-  private maxLetters = 300
+  private maxLetters = 1200
   private starterScale = 58
   private starterSpacing = 92
 
@@ -90,6 +104,9 @@ export class WordScrambler {
   private spawnExclusionRadius = 0
   private readonly spawnExclusionCenter = new THREE.Vector2(0, 0)
 
+  /** Letters attached to snake bodies (player or bots) — not picked up as field. */
+  private readonly bodyLetterSet = new Set<Letter>()
+
   constructor(options: {
     scene: THREE.Scene
     bounds: Bounds
@@ -103,6 +120,7 @@ export class WordScrambler {
     this.bounds = options.bounds
     this.letterRadius = options.letterRadius ?? 26
     if (options.maxLetters != null) this.maxLetters = options.maxLetters
+    else this.maxLetters = 1200
     if (options.starterScale != null) this.starterScale = options.starterScale
     if (options.starterSpacing != null) this.starterSpacing = options.starterSpacing
     if (options.themeMode != null) this.themeMode = options.themeMode
@@ -130,7 +148,7 @@ export class WordScrambler {
   private getLetterTexture(char: string): THREE.Texture {
     const existing = this.textureByChar.get(char)
     if (existing) return existing
-    const tex = makeLetterTexture(char, this.themeMode)
+    const tex = makeFieldLetterTexture(char, this.themeMode)
     this.textureByChar.set(char, tex)
     return tex
   }
@@ -150,6 +168,7 @@ export class WordScrambler {
 
   private clearLetters() {
     for (const l of this.letters) l.setActive(false)
+    this.bodyLetterSet.clear()
   }
 
   /**
@@ -160,6 +179,45 @@ export class WordScrambler {
       if (!l.isActive() && !this.starterLetterSet.has(l)) return l
     }
     return null
+  }
+
+  isBodyLetter(letter: Letter): boolean {
+    return this.bodyLetterSet.has(letter)
+  }
+
+  /**
+   * Field letter becomes a snake body segment (same sprite). Call after spawnReplacementLetter.
+   */
+  promoteFieldLetterToBody(letter: Letter): void {
+    this.starterLetterSet.delete(letter)
+    this.starterAnimData.delete(letter)
+    this.bodyLetterSet.add(letter)
+    const s = this.letterRadius * 0.82
+    letter.sprite.scale.setScalar(s)
+    letter.sprite.position.z = 1
+  }
+
+  /**
+   * New body segment from a pooled inactive letter (e.g. when tray grows without a field pickup).
+   */
+  acquireBodyLetter(char: string): Letter | null {
+    const slot = this.getInactiveLetter()
+    if (!slot) return null
+    this.applyLetterVisual(slot, char)
+    const s = this.letterRadius * 0.82
+    slot.sprite.scale.setScalar(s)
+    this.bodyLetterSet.add(slot)
+    slot.sprite.position.z = 1
+    return slot
+  }
+
+  releaseBodyLetter(letter: Letter): void {
+    this.bodyLetterSet.delete(letter)
+    letter.setActive(false)
+  }
+
+  releaseBodyLetters(letters: Letter[]): void {
+    for (const l of letters) this.releaseBodyLetter(l)
   }
 
   private applyLetterVisual(letter: Letter, ch: string) {
@@ -335,6 +393,41 @@ export class WordScrambler {
     }
   }
 
+  /**
+   * Drop pickups as field letters near a point; optional bias toward a direction (e.g. baiter).
+   */
+  dropLettersAt(
+    center: THREE.Vector2,
+    chars: string[],
+    bias?: { origin: THREE.Vector2; forward: THREE.Vector2 },
+  ): void {
+    if (!chars.length) return
+    const list = chars.map((c) => c.toLowerCase())
+    shuffleInPlace(list)
+    const n = list.length
+    const margin = Math.max(120, this.letterRadius * 4.2)
+    const fwd = bias?.forward
+    for (let i = 0; i < n; i++) {
+      const slot = this.getInactiveLetter()
+      if (!slot) return
+      this.applyLetterVisual(slot, list[i])
+      const angle = (i / Math.max(1, n - 1)) * Math.PI * 2 + (Math.random() - 0.5) * 0.5
+      const r = 35 + Math.random() * 95 + i * 0.35
+      let x = center.x + Math.cos(angle) * r
+      let y = center.y + Math.sin(angle) * r
+      if (fwd && bias) {
+        const len = Math.max(0.001, fwd.length())
+        x += (fwd.x / len) * (55 + i * 8)
+        y += (fwd.y / len) * (55 + i * 8)
+      }
+      slot.sprite.position.set(
+        THREE.MathUtils.clamp(x, this.bounds.minX + margin, this.bounds.maxX - margin),
+        THREE.MathUtils.clamp(y, this.bounds.minY + margin, this.bounds.maxY - margin),
+        1,
+      )
+    }
+  }
+
   spawnTipLetters(count = 4): void {
     for (let n = 0; n < count; n++) {
       const slot = this.getInactiveLetter()
@@ -346,5 +439,10 @@ export class WordScrambler {
 
   getActiveLetters(): Letter[] {
     return this.letters.filter((l) => l.isActive())
+  }
+
+  /** Ambient + starter letters (anything not attached to a snake body). */
+  getPickupLetters(): Letter[] {
+    return this.letters.filter((l) => l.isActive() && !this.bodyLetterSet.has(l))
   }
 }

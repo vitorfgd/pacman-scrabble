@@ -36,8 +36,8 @@ export function isVowelLetter(ch: string): boolean {
  * - Vowels and consonants have different bases.
  * - Letters that are less common in the word list get a higher multiplier.
  *
- * Target scale: averages work well with ~50-200 total points per quest word
- * (before quest multipliers and Word-of-the-Day bonus).
+ * Target scale: averages work well with ~50-200 total points per multi-letter play
+ * (before Word-of-the-Day bonus).
  */
 export function getLetterScore(ch: string): number {
   const c = (ch ?? '').toLowerCase()

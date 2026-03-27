@@ -1,75 +1,61 @@
-export type QuestHudState = {
-  targetLength: number
-  /** Optional extra line (e.g. a tip). */
-  subtitle?: string
-}
-
 export class Hud {
-  private readonly questMultEl: HTMLElement
-  private readonly wodEl: HTMLElement
+  private readonly scoreValueEl: HTMLElement
+  private readonly boostFillEl: HTMLElement
+  private readonly submitGateStatusEl: HTMLElement
   private readonly powerModeEl: HTMLElement
-  private readonly questPanelEl: HTMLElement
   private readonly resetButtonEl: HTMLButtonElement
   private readonly pauseButtonEl: HTMLButtonElement
   private readonly hardResetButtonEl: HTMLButtonElement
-  private readonly scoreEl: HTMLElement
+  private readonly lastRunValueEl: HTMLElement
 
   constructor() {
-    const questMultEl = document.getElementById('questMult')
-    const wodEl = document.getElementById('wod')
+    const scoreValueEl = document.getElementById('scoreValue')
+    const boostFillEl = document.getElementById('boostBarFill')
+    const submitGateStatusEl = document.getElementById('submitGateStatus')
     const powerModeEl = document.getElementById('powerMode')
-    const questPanelEl = document.getElementById('questPanel')
+    const lastRunValueEl = document.getElementById('lastRunValue')
     const resetButtonEl = document.getElementById('resetTray') as HTMLButtonElement | null
     const pauseButtonEl = document.getElementById('pauseGame') as HTMLButtonElement | null
     const hardResetButtonEl = document.getElementById('hardResetGame') as HTMLButtonElement | null
-    const scoreEl = document.getElementById('score')
 
-    if (!questMultEl) throw new Error('Missing #questMult element')
-    if (!wodEl) throw new Error('Missing #wod element')
+    if (!scoreValueEl) throw new Error('Missing #scoreValue element')
+    if (!boostFillEl) throw new Error('Missing #boostBarFill element')
+    if (!submitGateStatusEl) throw new Error('Missing #submitGateStatus element')
     if (!powerModeEl) throw new Error('Missing #powerMode element')
-    if (!questPanelEl) throw new Error('Missing #questPanel element')
+    if (!lastRunValueEl) throw new Error('Missing #lastRunValue element')
     if (!resetButtonEl) throw new Error('Missing #resetTray button element')
     if (!pauseButtonEl) throw new Error('Missing #pauseGame button element')
     if (!hardResetButtonEl) throw new Error('Missing #hardResetGame button element')
-    if (!scoreEl) throw new Error('Missing #score element')
 
-    this.questMultEl = questMultEl
-    this.wodEl = wodEl
+    this.scoreValueEl = scoreValueEl
+    this.boostFillEl = boostFillEl
+    this.submitGateStatusEl = submitGateStatusEl
     this.powerModeEl = powerModeEl
-    this.questPanelEl = questPanelEl
+    this.lastRunValueEl = lastRunValueEl
     this.resetButtonEl = resetButtonEl
     this.pauseButtonEl = pauseButtonEl
     this.hardResetButtonEl = hardResetButtonEl
-    this.scoreEl = scoreEl
+  }
+
+  /** Highlight when player head is inside the scoring rectangle. */
+  setSubmitZoneInside(inside: boolean): void {
+    this.submitGateStatusEl.textContent = inside ? 'In scoring zone' : 'Enter the rainbow zone below spawn to score'
+    this.submitGateStatusEl.classList.toggle('submit-gate-ready', inside)
   }
 
   setScore(score: number): void {
-    this.scoreEl.textContent = score.toLocaleString()
+    this.scoreValueEl.textContent = score.toLocaleString()
   }
 
-  setQuestMultiplier(mult: number): void {
-    this.questMultEl.textContent = `${mult.toFixed(2)}×`
+  /** Score from the previous completed run (shown for comparison). */
+  setLastRunDisplay(score: number): void {
+    this.lastRunValueEl.textContent = score.toLocaleString()
   }
 
-  setWordOfDay(word: string): void {
-    this.wodEl.textContent = word.toUpperCase()
-  }
-
-  setQuestPanel(state: QuestHudState): void {
-    this.questPanelEl.innerHTML = ''
-
-    const main = document.createElement('div')
-    main.className = 'quest-line quest-line-main'
-    main.textContent = `Spell a word with at least ${state.targetLength} letters`
-    this.questPanelEl.appendChild(main)
-
-    const subText = state.subtitle?.trim()
-    if (subText) {
-      const sub = document.createElement('div')
-      sub.className = 'quest-line quest-line-sub'
-      sub.textContent = subText
-      this.questPanelEl.appendChild(sub)
-    }
+  /** `fill` in 0..1 — width of the boost bar. */
+  setBoostFill(fill: number): void {
+    const f = Math.max(0, Math.min(1, fill))
+    this.boostFillEl.style.width = `${(f * 100).toFixed(1)}%`
   }
 
   setPowerMode(active: boolean, remainingMs?: number): void {

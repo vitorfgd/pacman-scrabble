@@ -325,22 +325,97 @@ canvas {
   display: block;
 }
 
-/* ── Score — top center ─────────────────────────────────────────────────── */
+/* ── Score + boost (HUD top-right) ─────────────────────────────────────── */
 
-#scoreDisplay {
-  position: fixed;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  text-align: center;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-  color: #e8e8f2;
-  pointer-events: none;
-  z-index: 30;
-  background: rgba(10, 10, 24, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  padding: 6px 24px 8px;
+.score-hud-row {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.score-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px 10px;
+}
+
+.last-run-hint {
+  font-size: 13px;
+  font-weight: 700;
+  color: #9eb8d8;
+  opacity: 0.88;
+}
+
+.boost-hud-row {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  width: min(200px, 46vw);
+}
+
+.boost-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  opacity: 0.5;
+}
+
+.boost-bar-outer {
+  width: 100%;
+  height: 9px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.boost-bar-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #2288ee, #55ddff);
+  border-radius: 5px;
+  box-shadow: 0 0 10px rgba(80, 200, 255, 0.35);
+}
+
+.submit-gate-row {
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: min(300px, 58vw);
+  padding: 10px 13px;
+  border-radius: 14px;
+  background: linear-gradient(155deg, rgba(18, 8, 32, 0.92), rgba(8, 18, 40, 0.95));
+  /* Static rim — no CSS filter/animation (those repainted the whole HUD every frame). */
+  border: 2px solid rgba(255, 80, 255, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.45) inset,
+    0 0 14px rgba(255, 60, 200, 0.4),
+    0 0 22px rgba(0, 230, 255, 0.32),
+    0 0 30px rgba(180, 255, 80, 0.22);
+  position: relative;
+}
+
+.submit-gate-status {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: #e8e0ff;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.submit-gate-status.submit-gate-ready {
+  color: #ffffff;
+  text-shadow:
+    0 0 12px rgba(255, 100, 255, 0.65),
+    0 0 22px rgba(0, 255, 200, 0.45),
+    0 0 32px rgba(255, 220, 80, 0.35);
+}
+
+.hud-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .score-label {
@@ -361,7 +436,23 @@ canvas {
   font-variant-numeric: tabular-nums;
 }
 
-/* ── HUD corner (quest/actions + portrait 2-col layout) ─────────────────── */
+.hint-block {
+  margin: 0;
+}
+
+.hint-line {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+  opacity: 0.72;
+  margin: 0 0 8px;
+}
+
+.hint-line:last-child {
+  margin-bottom: 0;
+}
+
+/* ── HUD corner (actions) ───────────────────────────────────────────────── */
 
 #hudCorner {
   position: fixed;
@@ -438,6 +529,16 @@ canvas {
 
 .hud-button-danger:hover {
   background: var(--hud-button-danger-hover-bg);
+}
+
+.hud-button-accent {
+  border-color: rgba(120, 200, 255, 0.45);
+  background: rgba(60, 120, 220, 0.22);
+  color: #dff4ff;
+}
+
+.hud-button-accent:hover {
+  background: rgba(80, 150, 240, 0.32);
 }
 
 .power-mode {
@@ -727,6 +828,44 @@ canvas {
   text-shadow: 0 0 12px rgba(200, 180, 255, 0.4);
 }
 
+.word-cele-stack-sequence {
+  gap: 10px;
+}
+
+.word-cele-sequence-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.word-cele-pop-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+.word-cele-pop-word {
+  font-weight: 900;
+  font-size: clamp(20px, 5vw, 34px);
+  letter-spacing: 2px;
+  color: #fff;
+  text-shadow: 0 0 12px rgba(180, 220, 255, 0.5);
+}
+
+.word-cele-pop-pts {
+  font-weight: 800;
+  font-size: clamp(16px, 3.5vw, 22px);
+  color: #7cf0c8;
+  font-variant-numeric: tabular-nums;
+}
+
+.word-cele-total-sequence {
+  margin-top: 6px;
+}
+
 .reset-cele-title {
   font-size: clamp(30px, 6vw, 56px);
   font-weight: 950;
@@ -890,19 +1029,12 @@ body {
   touch-action: none;
 }
 
-#scoreDisplay,
 #hudInfo,
 #hudActions,
 .hud-possible,
 .word-cele-total,
 .reset-cele-subtitle {
   color: var(--game-fg);
-}
-
-#scoreDisplay {
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  background: var(--panel-bg);
-  border-color: var(--panel-border);
 }
 
 .score-value {
@@ -956,14 +1088,6 @@ body {
   align-items: flex-end;
 }
 
-:root[data-orientation='portrait'] #scoreDisplay {
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  left: 14px;
-  right: auto;
-  transform: none;
-  text-align: left;
-}
-
 :root[data-orientation='portrait'] .hud-label {
   font-size: 11px;
 }
@@ -973,10 +1097,10 @@ body {
 }
 
 :root[data-orientation='portrait'] .hud-possible {
-  top: auto;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  bottom: auto;
   left: 8px;
-  width: min(42vw, 210px);
+  width: min(52vw, 240px);
   padding: 7px;
 }
 
