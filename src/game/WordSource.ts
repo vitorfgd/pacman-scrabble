@@ -1,14 +1,5 @@
 import { words as popularWords } from 'popular-english-words'
 
-export function anagramSignature(word: string): string {
-  return word
-    .toLowerCase()
-    .replace(/[^a-z]/g, '')
-    .split('')
-    .sort()
-    .join('')
-}
-
 const SCRABBLE_LETTER_POINTS: Record<string, number> = {
   a: 1,
   b: 3,
@@ -51,7 +42,6 @@ type LengthRange = { min: number; max: number }
 export class WordSource {
   private readonly topWords: string[]
   private readonly wordsByLength = new Map<number, string[]>()
-  private readonly signatureToWords = new Map<string, string[]>()
 
   private readonly lengthRange: LengthRange = { min: 3, max: 6 }
   private readonly topWordCount: number
@@ -84,20 +74,7 @@ export class WordSource {
       const list = this.wordsByLength.get(len) ?? []
       list.push(w)
       this.wordsByLength.set(len, list)
-
-      const sig = anagramSignature(w)
-      const sigList = this.signatureToWords.get(sig) ?? []
-      sigList.push(w)
-      this.signatureToWords.set(sig, sigList)
     }
-  }
-
-  getAllWords(): string[] {
-    return this.topWords
-  }
-
-  getWordsForTraySignature(signature: string): string[] {
-    return this.signatureToWords.get(signature) ?? []
   }
 
   getRandomWord(lengthMin = 3, lengthMax = 6): string {
@@ -108,37 +85,6 @@ export class WordSource {
     const list = this.wordsByLength.get(length)
     if (!list || !list.length) throw new Error(`No offline words available for length=${length}`)
     return list[Math.floor(Math.random() * list.length)]
-  }
-
-  /**
-   * Returns exactly 4×3-letter + 3×4-letter + 3×5-letter + 2×6-letter words.
-   * The Word-of-the-Day is always included (replacing one word of its length).
-   */
-  getFixedPool(wod: string): string[] {
-    const config: { length: number; count: number }[] = [
-      { length: 3, count: 4 },
-      { length: 4, count: 3 },
-      { length: 5, count: 3 },
-      { length: 6, count: 2 },
-    ]
-    const result: string[] = []
-    for (const { length, count } of config) {
-      const pool = [...(this.wordsByLength.get(length) ?? [])]
-      for (let i = pool.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1))
-        ;[pool[i], pool[j]] = [pool[j], pool[i]]
-      }
-      // Exclude WOD from random fill so it isn't duplicated later.
-      const filtered = wod.length === length ? pool.filter((w) => w !== wod) : pool
-      result.push(...filtered.slice(0, count))
-    }
-    // Always ensure WOD is present.
-    if (!result.includes(wod) && wod.length >= 3 && wod.length <= 6) {
-      const replaceIdx = result.findIndex((w) => w.length === wod.length)
-      if (replaceIdx >= 0) result[replaceIdx] = wod
-      else result.push(wod)
-    }
-    return result
   }
 
   getWordByLength(length: number): string {

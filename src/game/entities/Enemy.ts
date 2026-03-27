@@ -125,7 +125,6 @@ export class Enemy {
   private patrolTurnTimer = 0
 
   private readonly enemyBlue = new THREE.Color(0x2a7fff)
-  private readonly powerShrink = 1
   private readonly ghostTextureByRole = new Map<EnemyRole, THREE.Texture>()
   private readonly iconTextureByRole = new Map<EnemyRole, THREE.Texture>()
 
@@ -359,7 +358,7 @@ export class Enemy {
     if (active) {
       mat.color.copy(this.enemyBlue)
       mat.emissive.set(0x1d4a99)
-      this.mesh.scale.setScalar(this.originalRadius * this.powerShrink)
+      this.mesh.scale.setScalar(this.originalRadius)
       this.iconSprite.visible = false
     } else {
       mat.color.set(0xffffff)

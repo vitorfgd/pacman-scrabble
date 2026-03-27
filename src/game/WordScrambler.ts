@@ -131,19 +131,6 @@ export class WordScrambler {
     return tex
   }
 
-  setThemeMode(themeMode: ThemeMode): void {
-    if (this.themeMode === themeMode) return
-    this.themeMode = themeMode
-    // Textures are theme-specific, so clear the cache and refresh active sprites.
-    this.textureByChar.clear()
-    for (const l of this.letters) {
-      if (!l.isActive()) continue
-      const mat = l.sprite.material as THREE.SpriteMaterial
-      mat.map = this.getLetterTexture(l.char)
-      mat.needsUpdate = true
-    }
-  }
-
   private clearLetters() {
     for (const l of this.letters) l.setActive(false)
   }
@@ -328,15 +315,6 @@ export class WordScrambler {
       const slot = this.getInactiveLetter()
       if (!slot) return
       this.applyLetterVisual(slot, ch)
-      this.placeSingleLetterRandom(slot)
-    }
-  }
-
-  spawnTipLetters(count = 4): void {
-    for (let n = 0; n < count; n++) {
-      const slot = this.getInactiveLetter()
-      if (!slot) return
-      this.applyLetterVisual(slot, pickWeightedLetter())
       this.placeSingleLetterRandom(slot)
     }
   }

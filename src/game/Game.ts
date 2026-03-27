@@ -22,7 +22,6 @@ type ViewportProfile = {
   starterScale: number
   starterSpacing: number
   enemyCount: number
-  enemyBaseRadiusScale: number
   enemyMinSpawnDist: number
   enemyMaxSpawnDist: number
 }
@@ -111,7 +110,7 @@ export class Game {
 
   private gameStartMs = 0
 
-  // HTML tray element — positioned to follow player via world→screen projection
+  // HTML tray element
   private trayEl: HTMLDivElement | null = null
   private tray: string[] = []
 
@@ -125,8 +124,6 @@ export class Game {
 
   private fruit: Fruit
   private fruitNextSpawnMs = 0
-
-  // (Tips removed for now)
 
   private score = 0
   private wordsFound = 0
@@ -160,6 +157,7 @@ export class Game {
 
   /** Until the first directional input, enemies (and fruit) stay idle. */
   private awaitingFirstMove = true
+  private inputBound = false
 
   constructor(options: GameOptions) {
     this.container = options.container
@@ -230,8 +228,7 @@ export class Game {
     this.bounds = { minX: -half, maxX: half, minY: -half, maxY: half }
   }
 
-  private setupInput() {
-    window.addEventListener('keydown', (ev: KeyboardEvent) => {
+  private readonly onKeyDown = (ev: KeyboardEvent) => {
       const set = (dir: Dir) => {
         ev.preventDefault()
         if (this.awaitingFirstMove) {
@@ -253,45 +250,67 @@ export class Game {
       }
       if (ev.code === 'KeyP') this.togglePause()
       if (ev.code === 'KeyH') this.hardResetGame()
-    })
+    }
 
-    // Mobile/portrait: swipe to set direction.
-    const start = { x: 0, y: 0, active: false }
-    this.renderer.domElement.addEventListener('touchstart', (ev: TouchEvent) => {
-      if (!this.isPortraitMode()) return
-      if (ev.touches.length !== 1) return
-      start.active = true
-      start.x = ev.touches[0]?.clientX ?? 0
-      start.y = ev.touches[0]?.clientY ?? 0
-    }, { passive: true })
+  private readonly onTouchStart = (ev: TouchEvent) => {
+    if (!this.isPortraitMode()) return
+    if (ev.touches.length !== 1) return
+    this.swipeStart.active = true
+    this.swipeStart.x = ev.touches[0]?.clientX ?? 0
+    this.swipeStart.y = ev.touches[0]?.clientY ?? 0
+  }
 
-    window.addEventListener('touchend', (ev: TouchEvent) => {
-      if (!start.active) return
-      start.active = false
-      if (!this.isPortraitMode()) return
-      if (ev.changedTouches.length !== 1) return
-      const endX = ev.changedTouches[0]?.clientX ?? 0
-      const endY = ev.changedTouches[0]?.clientY ?? 0
-      const dx = endX - start.x
-      const dy = endY - start.y
-      const dist = Math.hypot(dx, dy)
-      if (dist < 24) return
+  private readonly onTouchEnd = (ev: TouchEvent) => {
+    if (!this.swipeStart.active) return
+    this.swipeStart.active = false
+    if (!this.isPortraitMode()) return
+    if (ev.changedTouches.length !== 1) return
+    const endX = ev.changedTouches[0]?.clientX ?? 0
+    const endY = ev.changedTouches[0]?.clientY ?? 0
+    const dx = endX - this.swipeStart.x
+    const dy = endY - this.swipeStart.y
+    const dist = Math.hypot(dx, dy)
+    if (dist < 24) return
 
-      if (Math.abs(dx) > Math.abs(dy)) {
-        if (this.awaitingFirstMove) {
-          this.awaitingFirstMove = false
-          this.setStartInstructionVisible(false)
-        }
-        this.player.setDesiredDir({ x: Math.sign(dx) as -1 | 0 | 1, y: 0 })
-      } else {
-        // Screen Y grows down; world Y grows up.
-        if (this.awaitingFirstMove) {
-          this.awaitingFirstMove = false
-          this.setStartInstructionVisible(false)
-        }
-        this.player.setDesiredDir({ x: 0, y: (-Math.sign(dy)) as -1 | 0 | 1 })
+    if (Math.abs(dx) > Math.abs(dy)) {
+      if (this.awaitingFirstMove) {
+        this.awaitingFirstMove = false
+        this.setStartInstructionVisible(false)
       }
-    }, { passive: true })
+      this.player.setDesiredDir({ x: Math.sign(dx) as -1 | 0 | 1, y: 0 })
+    } else {
+      // Screen Y grows down; world Y grows up.
+      if (this.awaitingFirstMove) {
+        this.awaitingFirstMove = false
+        this.setStartInstructionVisible(false)
+      }
+      this.player.setDesiredDir({ x: 0, y: (-Math.sign(dy)) as -1 | 0 | 1 })
+    }
+  }
+
+  private readonly swipeStart = { x: 0, y: 0, active: false }
+
+  private setupInput() {
+    if (this.inputBound) return
+    this.inputBound = true
+    window.addEventListener('keydown', this.onKeyDown)
+    this.renderer.domElement.addEventListener('touchstart', this.onTouchStart, { passive: true })
+    window.addEventListener('touchend', this.onTouchEnd, { passive: true })
+  }
+
+  private teardownInput() {
+    if (!this.inputBound) return
+    this.inputBound = false
+    window.removeEventListener('keydown', this.onKeyDown)
+    this.renderer.domElement.removeEventListener('touchstart', this.onTouchStart)
+    window.removeEventListener('touchend', this.onTouchEnd)
+  }
+
+  private reconcileViewportRuntimeState(): void {
+    if (!this.wordScrambler) return
+    this.spawnInitialEnemies()
+    this.wordScrambler.initRandomFill(this.currentQuestLength)
+    if (this.questTargetWord) this.wordScrambler.spawnStarterWord(this.questTargetWord, new THREE.Vector2(0, 0))
   }
 
   private onResize = () => {
@@ -311,6 +330,7 @@ export class Game {
     this.camera.bottom = -halfY
     this.camera.updateProjectionMatrix()
     this.applyViewportProfileRuntime()
+    if (this.running) this.reconcileViewportRuntimeState()
   }
 
   private isPortraitMode(): boolean {
@@ -331,7 +351,6 @@ export class Game {
         starterScale: 58 * s,
         starterSpacing: 92 * s,
         enemyCount: 36,
-        enemyBaseRadiusScale: 1 * s,
         enemyMinSpawnDist: 1050 * s,
         enemyMaxSpawnDist: Math.min(2680 * s, this.mapSize / 2 - 80),
       }
@@ -343,7 +362,6 @@ export class Game {
       starterScale: 72 * s,
       starterSpacing: 104 * s,
       enemyCount: 30,
-      enemyBaseRadiusScale: 0.92 * s,
       enemyMinSpawnDist: 1100 * s,
       enemyMaxSpawnDist: Math.min(2620 * s, this.mapSize / 2 - 80),
     }
@@ -457,9 +475,11 @@ export class Game {
     const goldenAngle = Math.PI * (3 - Math.sqrt(5))
     for (let i = 0; i < this.enemyPool.length; i++) {
       this.enemyChaseAggro[i] = false
+      this.enemyLastHitMs[i] = 0
       this.enemyPool[i].setActive(false, { x: 0, y: 0 }, 10)
     }
-    for (let i = 0; i < count; i++) {
+    const spawnCount = Math.min(count, this.enemyPool.length)
+    for (let i = 0; i < spawnCount; i++) {
       const r = this.viewportProfile.playerSize
       const margin = r * 2
       const t = (i + 0.5) / Math.max(1, count)
@@ -557,6 +577,7 @@ export class Game {
       }
       this.trayEl.appendChild(slot)
     }
+    this.hud?.setBackspaceEnabled(this.tray.length > 0)
   }
 
   // ── Power Mode ────────────────────────────────────────────────────────────
@@ -852,6 +873,7 @@ export class Game {
 
     for (let i = 0; i < this.enemyPool.length; i++) {
       this.enemyChaseAggro[i] = false
+      this.enemyLastHitMs[i] = 0
       this.enemyPool[i].setActive(false, { x: 0, y: 0 }, 10)
     }
     this.fruit.setActive(false, new THREE.Vector2(0, 0), 22 * GRID_CELL_SCALE)
@@ -953,6 +975,13 @@ export class Game {
     if (this.paused) this.togglePause()
     this.requestReset()
     playInfoCelebration(this.wordCelebrationEl, 'HARD RESET', 'Everything restarted.', 1700)
+  }
+
+  stop(): void {
+    if (!this.running) return
+    this.running = false
+    this.teardownInput()
+    window.removeEventListener('resize', this.onResize)
   }
 
   // ── Word shockwave ────────────────────────────────────────────────────────

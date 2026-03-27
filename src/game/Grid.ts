@@ -57,15 +57,6 @@ export class Grid {
     return { cell, world: this.cellToWorld(cell) }
   }
 
-  worldToCellWithHalfSnap(wx: number, wy: number): Cell {
-    // Alternative snap mode: floor/round with explicit small epsilon.
-    // Useful if you want behavior more stable across floating point drift.
-    const eps = 1e-6
-    const x = (wx - this.minX) / this.cellSize + eps
-    const y = (wy - this.minY) / this.cellSize + eps
-    return this.clampCell({ x, y })
-  }
-
   getNeighbors4(cell: Cell): Cell[] {
     return [
       { x: cell.x + 1, y: cell.y },

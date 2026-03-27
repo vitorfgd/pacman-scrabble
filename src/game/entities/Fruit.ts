@@ -47,8 +47,6 @@ export class Fruit {
 
   isActive(): boolean { return this.active }
 
-  getRadius(): number { return this.mesh.scale.x }
-
   setActive(active: boolean, position: THREE.Vector2, radius = 22): void {
     this.active = active
     this.mesh.visible = active

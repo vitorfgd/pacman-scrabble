@@ -552,6 +552,14 @@ canvas {
   background: rgba(255, 255, 255, 0.14);
 }
 
+.hud-menu-toggle:focus-visible,
+.hud-button:focus-visible,
+.put-back-letter-button:focus-visible,
+.speed-boost-button:focus-visible {
+  outline: 2px solid rgba(173, 216, 255, 0.95);
+  outline-offset: 2px;
+}
+
 .hud-actions-menu {
   display: none;
   flex-direction: column;
@@ -629,6 +637,11 @@ canvas {
 
 .put-back-letter-button:hover {
   background: rgba(15, 22, 44, 0.95);
+}
+
+.put-back-letter-button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .speed-boost-button {

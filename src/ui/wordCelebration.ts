@@ -170,45 +170,6 @@ export function playWordCelebration(
   }, clearMs)
 }
 
-/**
- * Gather the collected tray letters into center first, then run celebration.
- */
-export function playWordCelebrationWithGather(
-  container: HTMLElement | null,
-  details: WordCelebrationDetails,
-  sourceRects: DOMRect[],
-): Promise<void> {
-  if (!container) return Promise.resolve()
-
-  container.innerHTML = ''
-  const gatherMs = 620
-  const centerX = window.innerWidth / 2
-  const centerY = window.innerHeight * 0.46
-
-  for (let i = 0; i < sourceRects.length; i++) {
-    const r = sourceRects[i]
-    if (!r) continue
-    const token = document.createElement('div')
-    token.className = 'word-gather-token'
-    token.textContent = (details.letters[i] ?? '').toUpperCase()
-    token.style.left = `${r.left + r.width / 2}px`
-    token.style.top = `${r.top + r.height / 2}px`
-    token.style.setProperty('--dx', `${centerX - (r.left + r.width / 2)}px`)
-    token.style.setProperty('--dy', `${centerY - (r.top + r.height / 2)}px`)
-    token.style.animationDuration = `${gatherMs}ms`
-    token.style.animationDelay = `${Math.min(220, i * 35)}ms`
-    container.appendChild(token)
-  }
-
-  return new Promise((resolve) => {
-    window.setTimeout(() => {
-      playWordCelebration(container, details)
-      const { clearMs } = getCelebrationTiming(details)
-      window.setTimeout(resolve, clearMs)
-    }, gatherMs + 240)
-  })
-}
-
 export function playResetCelebration(
   container: HTMLElement | null,
   title = 'RESET!',

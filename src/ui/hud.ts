@@ -62,10 +62,24 @@ export class Hud {
 
     this.menuToggleButtonEl.addEventListener('click', (ev) => {
       ev.stopPropagation()
-      this.actionsMenuEl.classList.toggle('open')
+      const open = !this.actionsMenuEl.classList.contains('open')
+      this.setActionsMenuOpen(open)
     })
-    window.addEventListener('click', () => this.actionsMenuEl.classList.remove('open'))
+    this.menuToggleButtonEl.setAttribute('aria-expanded', 'false')
+    this.menuToggleButtonEl.setAttribute('aria-controls', 'hudActions')
+    this.actionsMenuEl.setAttribute('aria-hidden', 'true')
+
+    window.addEventListener('click', () => this.setActionsMenuOpen(false))
     this.actionsMenuEl.addEventListener('click', (ev) => ev.stopPropagation())
+    window.addEventListener('keydown', (ev) => {
+      if (ev.code === 'Escape') this.setActionsMenuOpen(false)
+    })
+  }
+
+  private setActionsMenuOpen(open: boolean): void {
+    this.actionsMenuEl.classList.toggle('open', open)
+    this.menuToggleButtonEl.setAttribute('aria-expanded', open ? 'true' : 'false')
+    this.actionsMenuEl.setAttribute('aria-hidden', open ? 'false' : 'true')
   }
 
   setScore(score: number): void {
@@ -83,7 +97,7 @@ export class Hud {
   /** e.g. "4 LETTER WORD" — does not reveal the target spelling. */
   setQuestLengthLine(letterCount: number): void {
     const n = Math.max(1, Math.floor(letterCount))
-    this.questLengthLineEl.textContent = `${n} LETTER WORD`
+    this.questLengthLineEl.textContent = `${n} ${n === 1 ? 'LETTER' : 'LETTERS'} WORD`
   }
 
   setPowerMode(active: boolean, remainingMs?: number): void {
@@ -99,14 +113,14 @@ export class Hud {
 
   setOnResetTray(handler: () => void): void {
     this.resetButtonEl.addEventListener('click', () => {
-      this.actionsMenuEl.classList.remove('open')
+      this.setActionsMenuOpen(false)
       handler()
     })
   }
 
   setOnPauseToggle(handler: () => void): void {
     this.pauseButtonEl.addEventListener('click', () => {
-      this.actionsMenuEl.classList.remove('open')
+      this.setActionsMenuOpen(false)
       handler()
     })
   }
@@ -117,7 +131,7 @@ export class Hud {
 
   setOnHardReset(handler: () => void): void {
     this.hardResetButtonEl.addEventListener('click', () => {
-      this.actionsMenuEl.classList.remove('open')
+      this.setActionsMenuOpen(false)
       handler()
     })
   }
@@ -128,6 +142,11 @@ export class Hud {
 
   setOnPutBackLetter(handler: () => void): void {
     this.putBackLetterButtonEl.addEventListener('click', () => handler())
+  }
+
+  setBackspaceEnabled(enabled: boolean): void {
+    this.putBackLetterButtonEl.disabled = !enabled
+    this.putBackLetterButtonEl.setAttribute('aria-disabled', enabled ? 'false' : 'true')
   }
 
   setSpeedBoostState(progress01: number, ready: boolean, active: boolean, remainingMs?: number): void {
