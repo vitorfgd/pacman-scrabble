@@ -1,61 +1,44 @@
 export class Hud {
   private readonly scoreValueEl: HTMLElement
-  private readonly boostFillEl: HTMLElement
-  private readonly submitGateStatusEl: HTMLElement
+  private readonly coinValueEl: HTMLElement
   private readonly powerModeEl: HTMLElement
-  private readonly resetButtonEl: HTMLButtonElement
-  private readonly pauseButtonEl: HTMLButtonElement
-  private readonly hardResetButtonEl: HTMLButtonElement
-  private readonly lastRunValueEl: HTMLElement
+  readonly shopToggleEl: HTMLButtonElement
+  readonly shopOverlayEl: HTMLElement
+  readonly shopCloseEl: HTMLButtonElement
+  readonly shopSkinListEl: HTMLElement
 
   constructor() {
     const scoreValueEl = document.getElementById('scoreValue')
-    const boostFillEl = document.getElementById('boostBarFill')
-    const submitGateStatusEl = document.getElementById('submitGateStatus')
+    const coinValueEl = document.getElementById('coinValue')
     const powerModeEl = document.getElementById('powerMode')
-    const lastRunValueEl = document.getElementById('lastRunValue')
-    const resetButtonEl = document.getElementById('resetTray') as HTMLButtonElement | null
-    const pauseButtonEl = document.getElementById('pauseGame') as HTMLButtonElement | null
-    const hardResetButtonEl = document.getElementById('hardResetGame') as HTMLButtonElement | null
+    const shopToggleEl = document.getElementById('shopToggle') as HTMLButtonElement | null
+    const shopOverlayEl = document.getElementById('shopOverlay')
+    const shopCloseEl = document.getElementById('shopClose') as HTMLButtonElement | null
+    const shopSkinListEl = document.getElementById('shopSkinList')
 
     if (!scoreValueEl) throw new Error('Missing #scoreValue element')
-    if (!boostFillEl) throw new Error('Missing #boostBarFill element')
-    if (!submitGateStatusEl) throw new Error('Missing #submitGateStatus element')
+    if (!coinValueEl) throw new Error('Missing #coinValue element')
     if (!powerModeEl) throw new Error('Missing #powerMode element')
-    if (!lastRunValueEl) throw new Error('Missing #lastRunValue element')
-    if (!resetButtonEl) throw new Error('Missing #resetTray button element')
-    if (!pauseButtonEl) throw new Error('Missing #pauseGame button element')
-    if (!hardResetButtonEl) throw new Error('Missing #hardResetGame button element')
+    if (!shopToggleEl) throw new Error('Missing #shopToggle button element')
+    if (!shopOverlayEl) throw new Error('Missing #shopOverlay element')
+    if (!shopCloseEl) throw new Error('Missing #shopClose button element')
+    if (!shopSkinListEl) throw new Error('Missing #shopSkinList element')
 
     this.scoreValueEl = scoreValueEl
-    this.boostFillEl = boostFillEl
-    this.submitGateStatusEl = submitGateStatusEl
+    this.coinValueEl = coinValueEl
     this.powerModeEl = powerModeEl
-    this.lastRunValueEl = lastRunValueEl
-    this.resetButtonEl = resetButtonEl
-    this.pauseButtonEl = pauseButtonEl
-    this.hardResetButtonEl = hardResetButtonEl
-  }
-
-  /** Highlight when player head is inside the scoring rectangle. */
-  setSubmitZoneInside(inside: boolean): void {
-    this.submitGateStatusEl.textContent = inside ? 'In scoring zone' : 'Enter the rainbow zone below spawn to score'
-    this.submitGateStatusEl.classList.toggle('submit-gate-ready', inside)
+    this.shopToggleEl = shopToggleEl
+    this.shopOverlayEl = shopOverlayEl
+    this.shopCloseEl = shopCloseEl
+    this.shopSkinListEl = shopSkinListEl
   }
 
   setScore(score: number): void {
     this.scoreValueEl.textContent = score.toLocaleString()
   }
 
-  /** Score from the previous completed run (shown for comparison). */
-  setLastRunDisplay(score: number): void {
-    this.lastRunValueEl.textContent = score.toLocaleString()
-  }
-
-  /** `fill` in 0..1 — width of the boost bar. */
-  setBoostFill(fill: number): void {
-    const f = Math.max(0, Math.min(1, fill))
-    this.boostFillEl.style.width = `${(f * 100).toFixed(1)}%`
+  setCoins(coins: number): void {
+    this.coinValueEl.textContent = Math.max(0, Math.floor(coins)).toLocaleString()
   }
 
   setPowerMode(active: boolean, remainingMs?: number): void {
@@ -69,19 +52,8 @@ export class Hud {
     this.powerModeEl.parentElement?.classList.remove('hud-muted')
   }
 
-  setOnResetTray(handler: () => void): void {
-    this.resetButtonEl.addEventListener('click', () => handler())
-  }
-
-  setOnPauseToggle(handler: () => void): void {
-    this.pauseButtonEl.addEventListener('click', () => handler())
-  }
-
-  setPauseButtonState(paused: boolean): void {
-    this.pauseButtonEl.textContent = paused ? 'Resume (P)' : 'Pause (P)'
-  }
-
-  setOnHardReset(handler: () => void): void {
-    this.hardResetButtonEl.addEventListener('click', () => handler())
+  setShopOpen(open: boolean): void {
+    this.shopOverlayEl.classList.toggle('shop-overlay--open', open)
+    this.shopOverlayEl.setAttribute('aria-hidden', open ? 'false' : 'true')
   }
 }

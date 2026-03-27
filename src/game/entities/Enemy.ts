@@ -51,6 +51,11 @@ export class Enemy {
     return this.active
   }
 
+  /** True while executing a straight-line aggro dash toward the player. */
+  isDashActive(): boolean {
+    return this.dashActive
+  }
+
   getRadius(): number {
     return this.mesh.scale.x
   }
@@ -178,6 +183,7 @@ export class Enemy {
     speedScale: number,
     nowMs: number,
     fleeMode: boolean,
+    playerInSafeZone: boolean,
   ): void {
     if (!this.active) return
 
@@ -191,6 +197,9 @@ export class Enemy {
       if (len > 0.0001) dir.divideScalar(len)
       else dir.set(Math.random() - 0.5, Math.random() - 0.5).normalize()
     } else {
+      if (playerInSafeZone) {
+        this.dashActive = false
+      }
       if (this.dashActive && nowMs >= this.dashEndMs) {
         this.dashActive = false
         this.refreshPatrolWaypoint()
@@ -201,7 +210,11 @@ export class Enemy {
       const toPx = playerPos.x - pos.x
       const toPy = playerPos.y - pos.y
       const distSq = toPx * toPx + toPy * toPy
-      if (distSq > 1e-6 && distSq <= this.aggroRangeSq) {
+      if (
+        !playerInSafeZone &&
+        distSq > 1e-6 &&
+        distSq <= this.aggroRangeSq
+      ) {
         this.dashDir.set(toPx, toPy)
         const len = this.dashDir.length()
         if (len > 1e-6) this.dashDir.divideScalar(len)

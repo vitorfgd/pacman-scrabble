@@ -7,7 +7,22 @@ import { WordSource } from './WordSource'
 import { WordPartitioner } from './WordPartitioner'
 import { SnakeTrail } from './SnakeTrail'
 import { Letter } from './entities/Letter'
+import { CoinPickup } from './entities/CoinPickup'
 import { isVowelLetter } from './LetterScoring'
+import { AmbientBlobs } from './ambientBlobs'
+import { drawSafeZoneCircleHeadTexture } from './safeZoneCircleTexture'
+import {
+  SKINS,
+  loadCoins,
+  saveCoins,
+  loadOwnedSkins,
+  saveOwnedSkins,
+  loadEquippedSkinId,
+  saveEquippedSkinId,
+  skinById,
+  type SkinDef,
+  type SkinId,
+} from './skins'
 import { Hud } from '../ui/hud'
 import { playInfoCelebration, playResetCelebration, playWordSequenceCelebration } from '../ui/wordCelebration'
 
@@ -121,26 +136,33 @@ export class Game {
   private enemyPool: Enemy[] = []
   private enemySpeedScales: number[] = []
   private enemyLastHitMs: number[] = []
+  private enemyNearMissLastMs: number[] = []
   private readonly enemyCollisionCooldownMs = 450
+  private readonly enemyNearMissCooldownMs = 780
+  private readonly enemyNearMissGold = 4
   private playerSpillImmuneUntilMs = 0
 
   private fruit: Fruit
   private fruitNextSpawnMs = 0
 
-  // (Tips removed for now)
+  private ambientBlobs: AmbientBlobs
+  private readonly coinSlots: CoinPickup[] = []
+  private coinSlotNextSpawnMs: number[] = []
+
+  /** Persistent currency (localStorage). */
+  private metaCoins = 0
+  private ownedSkins = new Set<SkinId>(['default'])
+  private equippedSkinId: SkinId = 'default'
+  private bodyRingMaterial: THREE.MeshStandardMaterial | null = null
+  private shopUiBound = false
 
   private score = 0
-  private playerBoostHeld = false
-  /** 0..1 — refills slowly, drains fast while boosting (Shift). */
-  private boostEnergy = 1
-  private readonly boostFillPerSecond = 0.11
-  private readonly boostDrainPerSecond = 0.88
-  /** Single small rectangle below spawn (0,0); entering with your head auto-submits words. */
+  /** Rectangle below spawn (0,0); entering with your head auto-submits words. */
   private readonly submitZone: { minX: number; maxX: number; minY: number; maxY: number } = {
-    minX: -52,
-    maxX: 52,
-    minY: -340,
-    maxY: -268,
+    minX: -94,
+    maxX: 94,
+    minY: -390,
+    maxY: -218,
   }
 
   /** Patrol enemies avoid this padded box around the submit gate (world units). */
@@ -176,6 +198,9 @@ export class Game {
   private resetting = false
   private paused = false
   private pauseStartedMs = 0
+  /** Shop overlay freezes gameplay (separate timer accounting from P-pause). */
+  private shopOpen = false
+  private shopPauseStartedMs = 0
   private wordCelebrationEl: HTMLDivElement | null = null
 
 
@@ -222,6 +247,9 @@ export class Game {
     this.gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(this.mapSize, this.mapSize), gridMat)
     this.scene.add(this.gridPlane)
 
+    this.ambientBlobs = new AmbientBlobs(8, this.bounds, this.submitZone)
+    this.scene.add(this.ambientBlobs.group)
+
     this.player = new Player()
     this.player.setSize(this.initialPlayerSize)
     this.scene.add(this.player.mesh)
@@ -254,6 +282,187 @@ export class Game {
     this.bounds = { minX: -half, maxX: half, minY: -half, maxY: half }
   }
 
+  private applySkinDef(skin: SkinDef): void {
+    if (skin.id === 'safezone') {
+      this.player.setHeadVisual('safezone')
+      this.player.tickSafeZoneHeadTexture(performance.now(), false)
+    } else {
+      this.player.setHeadVisual('standard')
+      this.player.applySkin(skin.headColor, skin.headEmissive, skin.headEmissiveIntensity)
+    }
+    if (this.bodyRingMaterial) {
+      this.bodyRingMaterial.color.setHex(skin.headColor)
+      this.bodyRingMaterial.emissive.setHex(skin.headEmissive)
+      this.bodyRingMaterial.emissiveIntensity = skin.headEmissiveIntensity * 0.92
+    }
+    this.applyTrayColorsFromSkin(skin)
+  }
+
+  /** HTML tray rings + text track the same palette as the player head. */
+  private applyTrayColorsFromSkin(skin: SkinDef): void {
+    const hr = (skin.headColor >> 16) & 255
+    const hg = (skin.headColor >> 8) & 255
+    const hb = skin.headColor & 255
+    const er = (skin.headEmissive >> 16) & 255
+    const eg = (skin.headEmissive >> 8) & 255
+    const eb = skin.headEmissive & 255
+    const root = document.documentElement.style
+    root.setProperty('--tray-letter-border', `rgba(${hr},${hg},${hb},0.9)`)
+    root.setProperty('--tray-letter-shadow', `rgba(${er},${eg},${eb},0.55)`)
+    const lum = hr * 0.299 + hg * 0.587 + hb * 0.114
+    root.setProperty('--tray-letter-text', lum > 168 ? '#14141c' : '#f8f9ff')
+  }
+
+  private addMetaCoins(delta: number): void {
+    if (delta <= 0) return
+    this.metaCoins += delta
+    saveCoins(this.metaCoins)
+    this.hud?.setCoins(this.metaCoins)
+    this.refreshShopList()
+  }
+
+  private setShopOpen(open: boolean): void {
+    if (open === this.shopOpen) {
+      this.hud?.setShopOpen(open)
+      if (open) this.refreshShopList()
+      return
+    }
+    const now = performance.now()
+    if (open) {
+      this.shopOpen = true
+      this.shopPauseStartedMs = now
+    } else {
+      const pausedFor = Math.max(0, now - this.shopPauseStartedMs)
+      this.lastMs = now
+      this.gameStartMs += pausedFor
+      this.fruitNextSpawnMs += pausedFor
+      this.enemyNextSpawnMs += pausedFor
+      this.powerModeUntilMs += pausedFor
+      for (let i = 0; i < this.coinSlotNextSpawnMs.length; i++) {
+        this.coinSlotNextSpawnMs[i] += pausedFor
+      }
+      this.shopOpen = false
+    }
+    this.hud?.setShopOpen(open)
+    if (open) this.refreshShopList()
+  }
+
+  private refreshShopList(): void {
+    if (!this.hud) return
+    const root = this.hud.shopSkinListEl
+    root.innerHTML = ''
+    const equipped = this.equippedSkinId
+
+    for (const skin of SKINS) {
+      const owned = this.ownedSkins.has(skin.id)
+      const row = document.createElement('div')
+      row.className = 'shop-skin-row'
+
+      const sw = document.createElement('span')
+      sw.className = 'shop-skin-swatch'
+      if (skin.id === 'safezone') {
+        const sc = document.createElement('canvas')
+        sc.width = 64
+        sc.height = 64
+        const sctx = sc.getContext('2d')
+        if (sctx) {
+          drawSafeZoneCircleHeadTexture(sctx, 64, performance.now(), false)
+          sw.style.background = `url(${sc.toDataURL()}) center / cover no-repeat`
+        } else {
+          sw.style.background = `#${skin.headColor.toString(16).padStart(6, '0')}`
+        }
+      } else {
+        sw.style.background = `#${skin.headColor.toString(16).padStart(6, '0')}`
+      }
+
+      const meta = document.createElement('div')
+      meta.className = 'shop-skin-meta'
+
+      const title = document.createElement('div')
+      title.className = 'shop-skin-name'
+      title.textContent = skin.name
+
+      const price = document.createElement('div')
+      price.className = 'shop-skin-price'
+      if (skin.price <= 0) price.textContent = 'Free'
+      else if (owned) price.textContent = 'Owned'
+      else price.textContent = `${skin.price} gold`
+
+      meta.append(title, price)
+
+      const actions = document.createElement('div')
+      actions.className = 'shop-skin-actions'
+
+      if (!owned && skin.price > 0) {
+        const buy = document.createElement('button')
+        buy.type = 'button'
+        buy.className = 'hud-button shop-action-btn'
+        buy.textContent = 'Buy'
+        buy.disabled = this.metaCoins < skin.price
+        buy.addEventListener('click', () => {
+          if (this.metaCoins < skin.price || this.ownedSkins.has(skin.id)) return
+          this.metaCoins -= skin.price
+          saveCoins(this.metaCoins)
+          this.ownedSkins.add(skin.id)
+          saveOwnedSkins(this.ownedSkins)
+          this.hud?.setCoins(this.metaCoins)
+          this.refreshShopList()
+        })
+        actions.appendChild(buy)
+      }
+
+      if (owned) {
+        const eq = document.createElement('button')
+        eq.type = 'button'
+        eq.className = 'hud-button shop-action-btn'
+        eq.textContent = skin.id === equipped ? 'Equipped' : 'Equip'
+        eq.disabled = skin.id === equipped
+        if (skin.id !== equipped) {
+          eq.addEventListener('click', () => {
+            this.equippedSkinId = skin.id
+            saveEquippedSkinId(skin.id)
+            const def = skinById(skin.id)
+            if (def) this.applySkinDef(def)
+            this.refreshShopList()
+          })
+        }
+        actions.appendChild(eq)
+      }
+
+      row.append(sw, meta, actions)
+      root.appendChild(row)
+    }
+  }
+
+  private bindShopUi(): void {
+    if (this.shopUiBound || !this.hud) return
+    this.shopUiBound = true
+    const { shopToggleEl, shopCloseEl, shopOverlayEl } = this.hud
+    shopToggleEl.addEventListener('click', () => {
+      const open = !shopOverlayEl.classList.contains('shop-overlay--open')
+      this.setShopOpen(open)
+    })
+    shopCloseEl.addEventListener('click', () => this.setShopOpen(false))
+    shopOverlayEl.addEventListener('click', (ev) => {
+      if (ev.target === shopOverlayEl) this.setShopOpen(false)
+    })
+  }
+
+  /**
+   * Small fixed-ish tray glyphs: does not track tail length or camera tail-zoom,
+   * so circles stay compact (only scales slightly with viewport height on resize).
+   */
+  private syncTrayLetterCircleSizes(): void {
+    if (!this.trayEl) return
+    const h = this.container.clientHeight
+    const px = Math.max(16, Math.min(22, Math.round(h * 0.018)))
+    for (const el of this.trayEl.querySelectorAll<HTMLElement>('.tray-letter')) {
+      el.style.width = `${px}px`
+      el.style.height = `${px}px`
+      el.style.fontSize = `${Math.max(8, Math.round(px * 0.42))}px`
+    }
+  }
+
   private setupInput() {
     const updatePointer = (clientX: number, clientY: number) => {
       const rect = this.renderer.domElement.getBoundingClientRect()
@@ -272,18 +481,7 @@ export class Game {
     }, { passive: true })
 
     window.addEventListener('keydown', (ev: KeyboardEvent) => {
-      if (ev.code === 'KeyR') this.resetTray()
-      if (ev.code === 'KeyP') this.togglePause()
-      if (ev.code === 'KeyH') this.hardResetGame()
-      if (ev.code === 'ShiftLeft' || ev.code === 'ShiftRight') {
-        ev.preventDefault()
-        this.playerBoostHeld = true
-      }
-    })
-    window.addEventListener('keyup', (ev: KeyboardEvent) => {
-      if (ev.code === 'ShiftLeft' || ev.code === 'ShiftRight') {
-        this.playerBoostHeld = false
-      }
+      if (ev.code === 'KeyP' && !this.shopOpen) this.togglePause()
     })
   }
 
@@ -304,6 +502,7 @@ export class Game {
     this.camera.updateProjectionMatrix()
     this.applyViewportProfileRuntime()
     this.refreshHudScore()
+    this.syncTrayLetterCircleSizes()
   }
 
   private isPortraitMode(): boolean {
@@ -362,10 +561,6 @@ export class Game {
   private async initGameAsync() {
     try {
       this.hud = new Hud()
-      this.hud.setOnResetTray(() => this.resetTray())
-      this.hud.setOnPauseToggle(() => this.togglePause())
-      this.hud.setOnHardReset(() => this.hardResetGame())
-      this.hud.setPauseButtonState(false)
 
       // Cache DOM refs
       this.trayEl = document.getElementById('tray') as HTMLDivElement | null
@@ -383,7 +578,7 @@ export class Game {
         scene: this.scene,
         bounds: this.bounds,
         letterRadius: this.viewportProfile.letterRadius,
-        maxLetters: 240,
+        maxLetters: 88,
         starterScale: this.viewportProfile.starterScale,
         starterSpacing: this.viewportProfile.starterSpacing,
         themeMode: 'dark',
@@ -391,11 +586,28 @@ export class Game {
       this.wordScrambler.initRandomFill(0)
 
       this.setupEnemyPool()
+
+      this.metaCoins = loadCoins()
+      this.ownedSkins = loadOwnedSkins()
+      this.equippedSkinId = loadEquippedSkinId()
+      const equippedSkin = skinById(this.equippedSkinId) ?? SKINS[0]
+      this.applySkinDef(equippedSkin)
+
+      this.coinSlots.length = 0
+      this.coinSlotNextSpawnMs = []
+      const coinStart = performance.now()
+      for (let i = 0; i < 2; i++) {
+        const c = new CoinPickup()
+        this.scene.add(c.mesh)
+        c.setActive(false, new THREE.Vector2(0, 0), 15)
+        this.coinSlots.push(c)
+        this.coinSlotNextSpawnMs.push(coinStart + 2000 + i * 5000 + Math.random() * 4000)
+      }
+
+      this.bindShopUi()
       this.score = 0
-      this.boostEnergy = 1
       this.hud.setScore(0)
-      this.hud.setBoostFill(1)
-      this.hud.setLastRunDisplay(Game.loadLastRunScore())
+      this.hud.setCoins(this.metaCoins)
       this.resetSubmitZones()
       const start = performance.now()
       this.gameStartMs = start
@@ -418,6 +630,7 @@ export class Game {
       this.enemyPool.push(e)
       this.enemySpeedScales.push(1.22 + Math.random() * 0.95)
       this.enemyLastHitMs.push(0)
+      this.enemyNearMissLastMs.push(0)
     }
   }
 
@@ -430,6 +643,7 @@ export class Game {
       metalness: 0.08,
       roughness: 0.45,
     })
+    this.bodyRingMaterial = mat
     for (let i = 0; i < this.bodyRingPoolSize; i++) {
       const m = new THREE.Mesh(geo, mat)
       m.visible = false
@@ -458,12 +672,19 @@ export class Game {
   }
 
   private ensureSubmitGateCanvas(): void {
-    if (this.submitGateCanvas) return
-    const cw = 256
+    const cw = 384
     const ch = Math.round((cw * (this.submitZone.maxY - this.submitZone.minY)) / (this.submitZone.maxX - this.submitZone.minX))
+    const needH = Math.max(140, ch)
+    if (this.submitGateCanvas && (this.submitGateCanvas.width !== cw || this.submitGateCanvas.height !== needH)) {
+      this.submitGateTexture?.dispose()
+      this.submitGateCanvas = null
+      this.submitGateCtx = null
+      this.submitGateTexture = null
+    }
+    if (this.submitGateCanvas) return
     const canvas = document.createElement('canvas')
     canvas.width = cw
-    canvas.height = Math.max(120, ch)
+    canvas.height = needH
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d')
     this.submitGateCanvas = canvas
@@ -561,34 +782,28 @@ export class Game {
       ctx.fill()
     }
 
-    const titleSize = Math.max(13, Math.floor(h * 0.19))
+    const lineSize = Math.max(18, Math.floor(h * 0.22))
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     const tx = w * 0.5
-    const tyTitle = h * 0.4
-    ctx.font = `900 ${titleSize}px system-ui, "Segoe UI", sans-serif`
+    const tyLine1 = h * 0.38
+    const tyLine2 = h * 0.58
+    ctx.font = `900 ${lineSize}px system-ui, "Segoe UI", sans-serif`
     ctx.lineWidth = 3
     ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)'
-    ctx.strokeText('SUBMIT', tx, tyTitle)
-    const tg = ctx.createLinearGradient(tx - w * 0.45, tyTitle - titleSize, tx + w * 0.45, tyTitle + titleSize)
-    for (let i = 0; i <= 5; i++) {
-      tg.addColorStop(i / 5, `hsl(${((hueSpin + i * 58) % 360)}, 100%, 62%)`)
-    }
-    ctx.fillStyle = tg
-    ctx.fillText('SUBMIT', tx, tyTitle)
 
-    const subSize = Math.max(8, Math.floor(h * 0.078))
-    ctx.font = `800 ${subSize}px system-ui, "Segoe UI", sans-serif`
-    const tySub = h * 0.6
-    ctx.lineWidth = 2
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)'
-    ctx.strokeText('AUTO SCORE ZONE', tx, tySub)
-    const sg2 = ctx.createLinearGradient(tx - w * 0.4, tySub - subSize, tx + w * 0.4, tySub + subSize)
-    for (let i = 0; i <= 4; i++) {
-      sg2.addColorStop(i / 4, `hsl(${((hueSpin + 100 + i * 60) % 360)}, 92%, 76%)`)
+    const drawLine = (label: string, ty: number) => {
+      ctx.strokeText(label, tx, ty)
+      const g = ctx.createLinearGradient(tx - w * 0.45, ty - lineSize, tx + w * 0.45, ty + lineSize)
+      for (let i = 0; i <= 5; i++) {
+        g.addColorStop(i / 5, `hsl(${((hueSpin + i * 58) % 360)}, 100%, 62%)`)
+      }
+      ctx.fillStyle = g
+      ctx.fillText(label, tx, ty)
     }
-    ctx.fillStyle = sg2
-    ctx.fillText('AUTO SCORE ZONE', tx, tySub)
+
+    drawLine('SAFE', tyLine1)
+    drawLine('ZONE', tyLine2)
 
     this.submitGateTexture!.needsUpdate = true
   }
@@ -607,10 +822,12 @@ export class Game {
       opacity: 0.9,
       side: THREE.DoubleSide,
       depthTest: true,
+      depthWrite: false,
     })
     const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.set((z.minX + z.maxX) * 0.5, (z.minY + z.maxY) * 0.5, 0.52)
-    mesh.renderOrder = 4
+    // Above the grid (z=0) so the panel stays visible; below rings (0.45), letters/player/blobs (~1).
+    mesh.position.set((z.minX + z.maxX) * 0.5, (z.minY + z.maxY) * 0.5, 0.08)
+    mesh.renderOrder = 0
     this.scene.add(mesh)
     this.submitZoneMaterial = mat
   }
@@ -619,7 +836,6 @@ export class Game {
     this.submitZoneWasInside = false
     this.submitGateLastInside = null
     this.submitGateTexLastDrawMs = 0
-    this.hud?.setSubmitZoneInside(false)
     this.refreshSubmitZoneMesh(performance.now(), false)
   }
 
@@ -637,7 +853,6 @@ export class Game {
     const py = this.player.mesh.position.y
     const pr = this.player.getRadius()
     const inside = Game.circleIntersectsRect(px, py, pr, this.submitZone)
-    this.hud?.setSubmitZoneInside(inside)
 
     if (
       inside &&
@@ -746,7 +961,7 @@ export class Game {
   }
 
   private update(deltaSeconds: number, nowMs: number) {
-    if (this.paused) return
+    if (this.paused || this.shopOpen) return
     if (!this.resetting && this.gameStartMs > 0) {
       const t = (nowMs - this.gameStartMs) / 1000
       this.enemyGlobalRamp = Math.min(
@@ -757,13 +972,19 @@ export class Game {
 
     this.updateCamera(deltaSeconds)
     this.recomputePointerWorld()
-    const speedMult = this.applyPlayerBoost(deltaSeconds)
+    this.ambientBlobs.update(deltaSeconds, this.bounds)
     this.player.update(deltaSeconds, {
       pointerWorld: this.pointerWorld,
       bounds: this.bounds,
-      speedMultiplier: speedMult,
+      speedMultiplier: 1,
     })
-
+    if (this.equippedSkinId === 'safezone') {
+      const pr = this.player.getRadius()
+      const pp = this.player.mesh.position
+      const inSubmit = Game.circleIntersectsRect(pp.x, pp.y, pr, this.submitZone)
+      this.player.tickSafeZoneHeadTexture(nowMs, inSubmit)
+    }
+    this.checkBlobPlayerCollision()
     this.updateTrayPosition()
     this.updateShockwave(nowMs)
 
@@ -784,6 +1005,9 @@ export class Game {
     this.maybeSpawnFruit(nowMs)
     this.fruit.update(nowMs)
     this.handleFruitCollision(nowMs)
+    this.maybeSpawnCoinPickups(nowMs)
+    for (const c of this.coinSlots) c.update(nowMs)
+    this.handleCoinCollisions(nowMs)
   }
 
   // ── Camera ────────────────────────────────────────────────────────────────
@@ -831,6 +1055,7 @@ export class Game {
     )
     this.trayEl.style.left = `${x}px`
     this.trayEl.style.top = `${y}px`
+    this.syncTrayLetterCircleSizes()
   }
 
   private updateTrayContent() {
@@ -842,6 +1067,7 @@ export class Game {
       span.textContent = ch.toUpperCase()
       this.trayEl.appendChild(span)
     }
+    this.syncTrayLetterCircleSizes()
   }
 
   // ── Power Mode ────────────────────────────────────────────────────────────
@@ -880,18 +1106,6 @@ export class Game {
     if (changed) {
       this.updateTrayContent()
     }
-  }
-
-  private applyPlayerBoost(deltaSeconds: number): number {
-    if (!this.hud) return 1
-    if (this.playerBoostHeld && this.boostEnergy > 0) {
-      this.boostEnergy = Math.max(0, this.boostEnergy - this.boostDrainPerSecond * deltaSeconds)
-      this.hud.setBoostFill(this.boostEnergy)
-      return 1.72
-    }
-    this.boostEnergy = Math.min(1, this.boostEnergy + this.boostFillPerSecond * deltaSeconds)
-    this.hud.setBoostFill(this.boostEnergy)
-    return 1
   }
 
   private refreshHudScore(): void {
@@ -945,7 +1159,7 @@ export class Game {
         const ring = this.playerBodyRings[i]
         ring.visible = true
         ring.position.set(p.x, p.y, 0.45)
-        const r = this.playerBodyLetters[i].radius * 0.94
+        const r = this.playerBodyLetters[i].radius * 0.58
         ring.scale.setScalar(r)
       }
     }
@@ -958,6 +1172,11 @@ export class Game {
   private checkSnakeInteractions(nowMs: number): void {
     if (this.wordCompletionInFlight || !this.wordScrambler) return
     if (nowMs < this.playerSpillImmuneUntilMs) return
+
+    const hx = this.player.mesh.position.x
+    const hy = this.player.mesh.position.y
+    const hr = this.player.getRadius()
+    if (Game.circleIntersectsRect(hx, hy, hr, this.submitZone)) return
 
     for (let i = 0; i < this.enemyPool.length; i++) {
       const enemy = this.enemyPool[i]
@@ -982,7 +1201,7 @@ export class Game {
 
   private async tryAutoSubmitFromZone(): Promise<void> {
     if (!this.wordPartitioner || this.wordCompletionInFlight || !this.tray.length) return
-    if (this.paused) return
+    if (this.paused || this.shopOpen) return
     const partition = this.wordPartitioner.greedyPartition(this.tray)
     if (partition.words.length === 0) {
       playInfoCelebration(this.wordCelebrationEl, 'NO WORDS', 'Nothing spellable from these letters.', 1500)
@@ -1024,6 +1243,8 @@ export class Game {
 
       this.score += pts
       this.refreshHudScore()
+      const wordCoinBonus = Math.max(2, Math.min(30, Math.floor(pts / 35)))
+      this.addMetaCoins(wordCoinBonus)
       this.triggerWordShockwave(performance.now())
 
       const pops = partition.words.map((w) => ({
@@ -1046,13 +1267,14 @@ export class Game {
     const tmpOff = new THREE.Vector2()
     const tmpPP = new THREE.Vector2()
 
+    const pp = this.player.mesh.position
+    const pr = this.player.getRadius()
+    const playerInSafeZone = Game.circleIntersectsRect(pp.x, pp.y, pr, this.submitZone)
+    tmpPP.set(pp.x, pp.y)
+
     for (let i = 0; i < this.enemyPool.length; i++) {
       const enemy = this.enemyPool[i]
       if (!enemy.isActive()) continue
-
-      const pp = this.player.mesh.position
-      const pr = this.player.getRadius()
-      tmpPP.set(pp.x, pp.y)
 
       const bx = enemy.mesh.position.x
       const by = enemy.mesh.position.y
@@ -1063,41 +1285,47 @@ export class Game {
 
       const fleeMode = this.powerModeActive
       const speedScale = this.enemySpeedScales[i] * this.enemyGlobalRamp
-      enemy.update(deltaSeconds, tmpPP, this.bounds, speedScale, nowMs, fleeMode)
+      enemy.update(deltaSeconds, tmpPP, this.bounds, speedScale, nowMs, fleeMode, playerInSafeZone)
+
+      if (playerInSafeZone) continue
 
       const rHit = pr + enemy.getRadius()
-      if (dSq > rHit * rHit * 0.92) continue
-      if (nowMs - this.enemyLastHitMs[i] < this.enemyCollisionCooldownMs) continue
-      this.enemyLastHitMs[i] = nowMs
+      const hitThreshSq = rHit * rHit * 0.92
 
-      if (this.powerModeActive) {
-        this.enemySpeedScales[i] = 1.05 + Math.random() * 0.9
-        enemy.setActive(false, tmpOff, 10)
-      } else {
-        this.requestReset()
-        return
+      if (dSq <= hitThreshSq) {
+        if (nowMs - this.enemyLastHitMs[i] < this.enemyCollisionCooldownMs) continue
+        this.enemyLastHitMs[i] = nowMs
+
+        if (this.powerModeActive) {
+          this.enemySpeedScales[i] = 1.05 + Math.random() * 0.9
+          enemy.setActive(false, tmpOff, 10)
+        } else {
+          this.requestReset()
+          return
+        }
+        continue
       }
-    }
-  }
 
-  // ── Tray / tip controls ───────────────────────────────────────────────────
-
-  private resetTray() {
-    if (!this.wordScrambler) {
-      this.tray = []
-      this.updateTrayContent()
-      return
-    }
-    const returned = [...this.tray]
-    this.tray = []
-    for (const L of this.playerBodyLetters) this.wordScrambler.releaseBodyLetter(L)
-    this.playerBodyLetters = []
-    this.playerSnakeTrail?.reset()
-    for (const r of this.playerBodyRings) r.visible = false
-    this.player.setSize(this.initialPlayerSize)
-    this.updateTrayContent()
-    if (returned.length > 0) {
-      this.wordScrambler.spawnLettersFromTray(returned)
+      if (!fleeMode && enemy.isDashActive()) {
+        const ex = enemy.mesh.position.x
+        const ey = enemy.mesh.position.y
+        const px2 = pp.x - ex
+        const py2 = pp.y - ey
+        const dSqPost = px2 * px2 + py2 * py2
+        const nearOuterSq = (rHit + 62) * (rHit + 62)
+        if (dSqPost > hitThreshSq && dSqPost < nearOuterSq) {
+          if (nowMs - this.enemyNearMissLastMs[i] >= this.enemyNearMissCooldownMs) {
+            this.enemyNearMissLastMs[i] = nowMs
+            this.addMetaCoins(this.enemyNearMissGold)
+            playInfoCelebration(
+              this.wordCelebrationEl,
+              'CLOSE SHAVE',
+              `Dive bomb missed! +${this.enemyNearMissGold} gold`,
+              1550,
+            )
+          }
+        }
+      }
     }
   }
 
@@ -1112,7 +1340,6 @@ export class Game {
     const prevRun = Game.loadLastRunScore()
     const finalScore = this.score
     Game.saveLastRunScore(finalScore)
-    this.hud?.setLastRunDisplay(finalScore)
 
     playResetCelebration(
       this.wordCelebrationEl,
@@ -1131,12 +1358,15 @@ export class Game {
     const tmp = new THREE.Vector2(0, 0)
     for (const e of this.enemyPool) e.setActive(false, tmp, 10)
     this.fruit.setActive(false, tmp, 22)
+    for (const c of this.coinSlots) c.setActive(false, tmp, 15)
+    const nowCoin = performance.now()
+    for (let i = 0; i < this.coinSlotNextSpawnMs.length; i++) {
+      this.coinSlotNextSpawnMs[i] = nowCoin + 2500 + i * 4000
+    }
     if (this.shockwaveMesh) { this.shockwaveMesh.visible = false; this.shockwaveActive = false }
 
     this.score = 0
-    this.boostEnergy = 1
     this.hud?.setScore(0)
-    this.hud?.setBoostFill(1)
     this.resetSubmitZones()
     const now = performance.now()
     this.gameStartMs = now
@@ -1150,12 +1380,12 @@ export class Game {
   // ── HUD helpers ───────────────────────────────────────────────────────────
 
   private togglePause(): void {
+    if (this.shopOpen) return
     this.paused = !this.paused
-    this.hud?.setPauseButtonState(this.paused)
 
     if (this.paused) {
       this.pauseStartedMs = performance.now()
-      playInfoCelebration(this.wordCelebrationEl, 'PAUSED', 'Press P or click Resume', 1200)
+      playInfoCelebration(this.wordCelebrationEl, 'PAUSED', 'Press P to resume', 1200)
       return
     }
 
@@ -1166,11 +1396,9 @@ export class Game {
     this.fruitNextSpawnMs += pausedFor
     this.enemyNextSpawnMs += pausedFor
     this.powerModeUntilMs += pausedFor
-  }
-
-  private hardResetGame(): void {
-    if (this.paused) this.togglePause()
-    this.requestReset()
+    for (let i = 0; i < this.coinSlotNextSpawnMs.length; i++) {
+      this.coinSlotNextSpawnMs[i] += pausedFor
+    }
   }
 
   // ── Word shockwave ────────────────────────────────────────────────────────
@@ -1229,6 +1457,80 @@ export class Game {
     this.powerModeUntilMs = nowMs + dur
     this.hud?.setPowerMode(true, dur)
     for (const e of this.enemyPool) if (e.isActive()) e.setPowerMode(true)
+  }
+
+  private checkBlobPlayerCollision(): void {
+    if (this.resetting || !this.wordScrambler) return
+    const px = this.player.mesh.position.x
+    const py = this.player.mesh.position.y
+    const pr = this.player.getRadius()
+    if (Game.circleIntersectsRect(px, py, pr, this.submitZone)) return
+    let hit = false
+    this.ambientBlobs.forEachBlob((bx, by, br) => {
+      if (hit) return
+      const dx = px - bx
+      const dy = py - by
+      const rr = pr + br * 0.88
+      if (dx * dx + dy * dy <= rr * rr) hit = true
+    })
+    if (hit) this.requestReset()
+  }
+
+  private spawnCoinPickupSlot(slot: number, nowMs: number): void {
+    const c = this.coinSlots[slot]
+    if (!c || c.isActive()) return
+    const r = 15
+    const maxTries = 28
+    const fp = this.fruit.mesh.position
+    const fruitActive = this.fruit.isActive()
+    for (let t = 0; t < maxTries; t++) {
+      const pos = new THREE.Vector2(
+        THREE.MathUtils.lerp(this.bounds.minX + r, this.bounds.maxX - r, Math.random()),
+        THREE.MathUtils.lerp(this.bounds.minY + r, this.bounds.maxY - r, Math.random()),
+      )
+      if (Game.pointInRect(pos.x, pos.y, this.submitZone)) continue
+      if (fruitActive) {
+        const dx = pos.x - fp.x
+        const dy = pos.y - fp.y
+        if (dx * dx + dy * dy < (r + this.fruit.getRadius() + 120) ** 2) continue
+      }
+      for (let j = 0; j < this.coinSlots.length; j++) {
+        if (j === slot || !this.coinSlots[j].isActive()) continue
+        const o = this.coinSlots[j].mesh.position
+        const dx = pos.x - o.x
+        const dy = pos.y - o.y
+        if (dx * dx + dy * dy < 180 * 180) continue
+      }
+      c.setActive(true, pos, r)
+      this.coinSlotNextSpawnMs[slot] = nowMs + 12000 + Math.random() * 7000
+      return
+    }
+    this.coinSlotNextSpawnMs[slot] = nowMs + 2500
+  }
+
+  private maybeSpawnCoinPickups(nowMs: number): void {
+    for (let i = 0; i < this.coinSlots.length; i++) {
+      if (this.coinSlots[i].isActive()) continue
+      if (nowMs < (this.coinSlotNextSpawnMs[i] ?? 0)) continue
+      this.spawnCoinPickupSlot(i, nowMs)
+    }
+  }
+
+  private handleCoinCollisions(nowMs: number): void {
+    const pp = this.player.mesh.position
+    const pr = this.player.getRadius()
+    for (let i = 0; i < this.coinSlots.length; i++) {
+      const c = this.coinSlots[i]
+      if (!c.isActive()) continue
+      const cp = c.mesh.position
+      const dx = pp.x - cp.x
+      const dy = pp.y - cp.y
+      const r = pr + c.getRadius()
+      if (dx * dx + dy * dy > r * r * 0.9) continue
+      c.setActive(false, new THREE.Vector2(0, 0), 15)
+      this.addMetaCoins(10)
+      this.coinSlotNextSpawnMs[i] = nowMs + 4000 + Math.random() * 3500
+    }
   }
 
 }

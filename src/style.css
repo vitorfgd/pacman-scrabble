@@ -325,12 +325,27 @@ canvas {
   display: block;
 }
 
-/* ── Score + boost (HUD top-right) ─────────────────────────────────────── */
+/* ── Score + gold (HUD top-right) ───────────────────────────────────────── */
+
+.hud-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px 16px 14px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(12, 14, 32, 0.92), rgba(8, 10, 28, 0.88));
+  border: 1px solid rgba(255, 210, 120, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35) inset,
+    0 0 28px rgba(255, 200, 80, 0.12),
+    0 0 40px rgba(120, 200, 255, 0.1);
+}
 
 .score-hud-row {
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: 4px;
 }
 
 .score-line {
@@ -341,76 +356,34 @@ canvas {
   gap: 6px 10px;
 }
 
-.last-run-hint {
-  font-size: 13px;
-  font-weight: 700;
-  color: #9eb8d8;
-  opacity: 0.88;
-}
-
-.boost-hud-row {
+.coin-hud-row {
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
-  width: min(200px, 46vw);
-}
-
-.boost-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  opacity: 0.5;
-}
-
-.boost-bar-outer {
+  padding-top: 4px;
+  margin-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
   width: 100%;
-  height: 9px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.09);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  overflow: hidden;
 }
 
-.boost-bar-fill {
-  height: 100%;
-  width: 100%;
-  background: linear-gradient(90deg, #2288ee, #55ddff);
-  border-radius: 5px;
-  box-shadow: 0 0 10px rgba(80, 200, 255, 0.35);
-}
-
-.submit-gate-row {
-  flex-direction: column;
-  align-items: flex-end;
-  max-width: min(300px, 58vw);
-  padding: 10px 13px;
-  border-radius: 14px;
-  background: linear-gradient(155deg, rgba(18, 8, 32, 0.92), rgba(8, 18, 40, 0.95));
-  /* Static rim — no CSS filter/animation (those repainted the whole HUD every frame). */
-  border: 2px solid rgba(255, 80, 255, 0.55);
-  box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.45) inset,
-    0 0 14px rgba(255, 60, 200, 0.4),
-    0 0 22px rgba(0, 230, 255, 0.32),
-    0 0 30px rgba(180, 255, 80, 0.22);
-  position: relative;
-}
-
-.submit-gate-status {
+.coin-label {
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: 0.4px;
-  color: #e8e0ff;
-  line-height: 1.35;
-  text-align: right;
+  letter-spacing: 2.5px;
+  opacity: 0.75;
+  color: #ffe8a8;
 }
 
-.submit-gate-status.submit-gate-ready {
-  color: #ffffff;
+.coin-value {
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  color: #ffdf66;
   text-shadow:
-    0 0 12px rgba(255, 100, 255, 0.65),
-    0 0 22px rgba(0, 255, 200, 0.45),
-    0 0 32px rgba(255, 220, 80, 0.35);
+    0 0 18px rgba(255, 200, 60, 0.65),
+    0 0 36px rgba(255, 160, 40, 0.35);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .hud-button:disabled {
@@ -419,19 +392,22 @@ canvas {
 }
 
 .score-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  opacity: 0.5;
-  margin-bottom: 1px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2.5px;
+  opacity: 0.75;
+  margin-bottom: 2px;
+  color: #c8e0ff;
 }
 
 .score-value {
-  font-size: 32px;
+  font-size: 40px;
   font-weight: 900;
-  letter-spacing: -1px;
-  color: #ffe566;
-  text-shadow: 0 0 20px rgba(255, 220, 60, 0.5);
+  letter-spacing: -1.5px;
+  color: #fff2a0;
+  text-shadow:
+    0 0 22px rgba(255, 230, 120, 0.55),
+    0 0 48px rgba(100, 200, 255, 0.28);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -452,7 +428,44 @@ canvas {
   margin-bottom: 0;
 }
 
-/* ── HUD corner (actions) ───────────────────────────────────────────────── */
+/* ── Skin shop — primary control (top-left) ──────────────────────────────── */
+
+.shop-exclusive-btn {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  left: calc(env(safe-area-inset-left, 0px) + 14px);
+  z-index: 60;
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 12px 18px;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 215, 120, 0.55);
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.4px;
+  color: #0a0a12;
+  background: linear-gradient(165deg, #ffe566 0%, #ffb84d 45%, #ff8c42 100%);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.25) inset,
+    0 4px 18px rgba(255, 160, 60, 0.45),
+    0 0 28px rgba(255, 220, 120, 0.35);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.shop-exclusive-btn:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.2) inset,
+    0 6px 22px rgba(255, 140, 50, 0.55),
+    0 0 36px rgba(255, 200, 100, 0.45);
+}
+
+.shop-exclusive-btn:active {
+  transform: translateY(0);
+}
+
+/* ── HUD corner (stats) ─────────────────────────────────────────────────── */
 
 #hudCorner {
   position: fixed;
@@ -552,40 +565,6 @@ canvas {
   display: none;
 }
 
-/* ── Left rail — word hints ─────────────────────────────────────────────── */
-
-.hud-possible {
-  position: fixed;
-  left: 10px;
-  top: 10px;
-  width: 152px;
-  background: var(--hud-possible-bg);
-  border: 1px solid var(--hud-possible-border);
-  border-radius: 10px;
-  padding: 8px 8px 10px;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-  color: var(--hud-possible-color);
-  pointer-events: none;
-  backdrop-filter: blur(6px);
-  box-shadow:
-    0 0 22px var(--hud-possible-shadowA),
-    0 0 0 1px var(--hud-possible-shadowB) inset;
-}
-
-.hud-label-small {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  opacity: 0.5;
-  margin-bottom: 6px;
-}
-
-.possible-words {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 .quest-line {
   line-height: 1.35;
 }
@@ -656,27 +635,158 @@ canvas {
 }
 
 .tray-letter {
-  padding: 4px 10px;
-  border-radius: 8px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
   background: rgba(14, 14, 30, 0.88);
-  border: 1.5px solid var(--tray-letter-border);
+  border: 2px solid var(--tray-letter-border);
   color: var(--tray-letter-text);
   font-weight: 800;
-  font-size: 16px;
-  letter-spacing: 1px;
+  letter-spacing: 0;
+  line-height: 1;
   text-shadow: 0 0 8px var(--tray-letter-shadow);
 }
 
-.tray-letter.tray-vowel {
-  border-color: rgba(107, 203, 119, 0.9);
-  color: #eafff0;
-  text-shadow: 0 0 10px rgba(107, 203, 119, 0.35);
+.tray-letter.tray-vowel,
+.tray-letter.tray-consonant {
+  border-color: var(--tray-letter-border);
+  color: var(--tray-letter-text);
+  text-shadow: 0 0 10px var(--tray-letter-shadow);
 }
 
-.tray-letter.tray-consonant {
-  border-color: rgba(192, 132, 252, 0.85);
-  color: #f7f0ff;
-  text-shadow: 0 0 10px rgba(192, 132, 252, 0.35);
+/* ── Skin shop overlay ───────────────────────────────────────────────────── */
+
+.shop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 6, 18, 0.55);
+  backdrop-filter: blur(5px);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.shop-overlay.shop-overlay--open {
+  pointer-events: auto;
+  opacity: 1;
+  visibility: visible;
+}
+
+.shop-panel {
+  width: min(380px, 100%);
+  max-height: min(72vh, 520px);
+  overflow: auto;
+  border-radius: 16px;
+  padding: 18px 18px 20px;
+  background: var(--shop-panel-bg);
+  border: 1px solid var(--shop-panel-border);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  color: var(--game-fg);
+}
+
+.shop-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.shop-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.3px;
+}
+
+.shop-close {
+  cursor: pointer;
+  border: none;
+  border-radius: 10px;
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--game-fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.shop-close:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.shop-sub {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  opacity: 0.65;
+}
+
+.shop-skin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.shop-skin-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--shop-row-bg);
+  border: 1px solid var(--shop-row-border);
+}
+
+.shop-skin-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
+}
+
+.shop-skin-meta {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.shop-skin-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.shop-skin-price {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+.shop-skin-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.shop-action-btn {
+  white-space: nowrap;
+  min-width: 72px;
 }
 
 /* ── Win overlay ─────────────────────────────────────────────────────────── */
@@ -948,11 +1058,10 @@ canvas {
   --hud-button-danger-border: rgba(255, 120, 120, 0.5);
   --hud-button-danger-text: #ffd4d4;
   --hud-button-danger-hover-bg: rgba(255, 80, 80, 0.18);
-  --hud-possible-bg: rgba(10, 10, 22, 0.62);
-  --hud-possible-border: rgba(192, 132, 252, 0.25);
-  --hud-possible-color: #e8e8f2;
-  --hud-possible-shadowA: rgba(192, 132, 252, 0.18);
-  --hud-possible-shadowB: rgba(255, 255, 255, 0.04);
+  --shop-panel-bg: rgba(16, 16, 36, 0.96);
+  --shop-panel-border: rgba(160, 190, 255, 0.22);
+  --shop-row-bg: rgba(255, 255, 255, 0.05);
+  --shop-row-border: rgba(255, 255, 255, 0.08);
   --quest-main-color: #f0e9ff;
   --quest-main-shadowA: rgba(192, 132, 252, 0.38);
   --quest-main-shadowB: rgba(255, 255, 255, 0.12);
@@ -991,11 +1100,10 @@ canvas {
   --hud-button-danger-border: rgba(255, 80, 80, 0.65);
   --hud-button-danger-text: #b8002a;
   --hud-button-danger-hover-bg: rgba(255, 80, 80, 0.22);
-  --hud-possible-bg: rgba(255, 255, 255, 0.86);
-  --hud-possible-border: rgba(122, 54, 221, 0.25);
-  --hud-possible-color: #1b1f30;
-  --hud-possible-shadowA: rgba(122, 54, 221, 0.16);
-  --hud-possible-shadowB: rgba(0, 0, 0, 0.06);
+  --shop-panel-bg: rgba(255, 255, 255, 0.97);
+  --shop-panel-border: rgba(122, 54, 221, 0.22);
+  --shop-row-bg: rgba(122, 54, 221, 0.06);
+  --shop-row-border: rgba(122, 54, 221, 0.12);
   --quest-main-color: #22162f;
   --quest-main-shadowA: rgba(122, 54, 221, 0.28);
   --quest-main-shadowB: rgba(0, 0, 0, 0.08);
@@ -1030,8 +1138,6 @@ body {
 }
 
 #hudInfo,
-#hudActions,
-.hud-possible,
 .word-cele-total,
 .reset-cele-subtitle {
   color: var(--game-fg);
@@ -1060,17 +1166,6 @@ body {
   background: var(--chip-bg);
 }
 
-#hudActions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  pointer-events: none;
-  z-index: 55;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
-  text-align: right;
-  align-items: flex-end;
-}
-
 :root[data-orientation='portrait'] #hudCorner {
   top: 12px;
   bottom: auto;
@@ -1080,12 +1175,11 @@ body {
   align-items: flex-end;
 }
 
-:root[data-orientation='portrait'] #hudActions {
-  position: fixed;
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
-  right: 14px;
-  gap: 6px;
-  align-items: flex-end;
+:root[data-orientation='portrait'] .shop-exclusive-btn {
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 10px);
+  padding: 10px 14px;
+  font-size: 13px;
 }
 
 :root[data-orientation='portrait'] .hud-label {
@@ -1094,14 +1188,6 @@ body {
 
 :root[data-orientation='portrait'] .wod {
   font-size: 15px;
-}
-
-:root[data-orientation='portrait'] .hud-possible {
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  bottom: auto;
-  left: 8px;
-  width: min(52vw, 240px);
-  padding: 7px;
 }
 
 :root[data-orientation='portrait'] #tray {
@@ -1114,18 +1200,22 @@ body {
     bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
   }
 
+  .hud-stats {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
   .score-value {
-    font-size: 28px;
+    font-size: 34px;
+  }
+
+  .coin-value {
+    font-size: 26px;
   }
 
   .hud-button {
     font-size: 11px;
     padding: 5px 8px;
-  }
-
-  .tray-letter {
-    font-size: 14px;
-    padding: 4px 8px;
   }
 }
 

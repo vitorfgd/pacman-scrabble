@@ -140,6 +140,7 @@ export class WordScrambler {
       )
       sprite.scale.setScalar(this.letterRadius)
       sprite.position.set(0, 0, 1)
+      sprite.renderOrder = 1
       this.scene.add(sprite)
       this.letters.push(new Letter(sprite, '', this.letterRadius))
     }

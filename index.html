@@ -11,46 +11,44 @@
       <!-- Three.js canvas -->
       <div id="game"></div>
 
+      <button type="button" id="shopToggle" class="shop-exclusive-btn" aria-label="Open customize store">
+        Customize Store
+      </button>
+
       <!-- HUD -->
       <div id="hudCorner" aria-label="Game HUD">
         <div id="hudInfo">
-          <div class="hud-row score-hud-row">
-            <span class="score-label">SCORE</span>
-            <div class="score-line">
-              <span id="scoreValue" class="score-value">0</span>
-              <span id="lastRunHint" class="last-run-hint" aria-label="Previous run score"
-                >· last run <span id="lastRunValue">0</span></span
-              >
+          <div class="hud-stats" aria-label="Score and gold">
+            <div class="hud-row score-hud-row">
+              <span class="score-label">SCORE</span>
+              <div class="score-line">
+                <span id="scoreValue" class="score-value">0</span>
+              </div>
             </div>
-          </div>
-          <div class="hud-row boost-hud-row" aria-label="Boost energy">
-            <span class="boost-label">BOOST</span>
-            <div class="boost-bar-outer">
-              <div id="boostBarFill" class="boost-bar-fill"></div>
+            <div class="hud-row coin-hud-row">
+              <span class="coin-label">GOLD</span>
+              <span id="coinValue" class="coin-value">0</span>
             </div>
-          </div>
-          <div class="hud-row submit-gate-row">
-            <span id="submitGateStatus" class="submit-gate-status">Enter the rainbow zone below spawn to score</span>
           </div>
           <div class="hud-row hud-muted">
             <span id="powerMode" class="power-mode"></span>
           </div>
         </div>
-
-        <!-- Actions (stacked vertically) -->
-        <div id="hudActions" aria-label="Game actions">
-          <button id="resetTray" class="hud-button" type="button">Drop letters (R)</button>
-          <button id="pauseGame" class="hud-button" type="button">Pause (P)</button>
-          <button id="hardResetGame" class="hud-button hud-button-danger" type="button">Hard Reset (H)</button>
-        </div>
       </div>
 
-      <div class="hud-possible">
-        <div class="hud-label-small">SCORING</div>
-        <div class="possible-words hint-block">
-          <p class="hint-line">You only earn points when your head enters the loud rainbow rectangle below the starting point — words submit automatically.</p>
-          <p class="hint-line">Hold Shift to boost using your boost bar (refills slowly, drains quickly while boosting).</p>
-          <p class="hint-line">Some pickups look like letters but are traps — they vanish after a few seconds and respawn elsewhere. Touching one ends your run. Each reset compares to your last run.</p>
+      <div
+        id="shopOverlay"
+        class="shop-overlay"
+        aria-hidden="true"
+        aria-label="Skin shop"
+      >
+        <div class="shop-panel" role="dialog" aria-modal="true">
+          <div class="shop-panel-head">
+            <h2 class="shop-title">Skin shop</h2>
+            <button id="shopClose" class="shop-close" type="button" aria-label="Close shop">×</button>
+          </div>
+          <p class="shop-sub">Spend gold from pickups and word bonuses. Skins persist on this device.</p>
+          <div id="shopSkinList" class="shop-skin-list"></div>
         </div>
       </div>
 
