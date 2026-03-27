@@ -34,6 +34,9 @@ const QUEST_SCHEDULE = [
 
 const SPEED_BOOST_CHARGE_MS = 18000
 const SPEED_BOOST_ACTIVE_MS = 2000
+const INTRO_MINI_BOOST_MS = 1200
+const INTRO_MINI_BOOST_READY_MS = 4500
+const INTRO_WINDOW_MS = 10000
 const SPEED_BOOST_MULT = 1.6
 const ENEMY_BASE_SPEED_MULT = 0.78
 const GRID_CELL_SCALE = 1.25
@@ -133,6 +136,13 @@ export class Game {
 
   private speedBoostChargeProgressMs = 0
   private speedBoostActiveUntilMs = 0
+  private introMiniBoostAvailable = true
+  private introMiniBoostGranted = false
+  private introFirstMoveJuiced = false
+  private audioLayerStep = 0
+  private pickupAudioCtx: AudioContext | null = null
+
+  private cameraJuiceOffset = new THREE.Vector2()
 
   private resetting = false
   private paused = false
@@ -234,6 +244,7 @@ export class Game {
         if (this.awaitingFirstMove) {
           this.awaitingFirstMove = false
           this.setStartInstructionVisible(false)
+          this.triggerFirstMoveJuice(dir)
         }
         this.player.setDesiredDir(dir)
       }
@@ -276,6 +287,7 @@ export class Game {
       if (this.awaitingFirstMove) {
         this.awaitingFirstMove = false
         this.setStartInstructionVisible(false)
+        this.triggerFirstMoveJuice({ x: Math.sign(dx) as -1 | 0 | 1, y: 0 })
       }
       this.player.setDesiredDir({ x: Math.sign(dx) as -1 | 0 | 1, y: 0 })
     } else {
@@ -283,6 +295,7 @@ export class Game {
       if (this.awaitingFirstMove) {
         this.awaitingFirstMove = false
         this.setStartInstructionVisible(false)
+        this.triggerFirstMoveJuice({ x: 0, y: (-Math.sign(dy)) as -1 | 0 | 1 })
       }
       this.player.setDesiredDir({ x: 0, y: (-Math.sign(dy)) as -1 | 0 | 1 })
     }
@@ -432,6 +445,11 @@ export class Game {
       this.hud.setWordsFound(0)
       this.speedBoostChargeProgressMs = 0
       this.speedBoostActiveUntilMs = 0
+      this.introMiniBoostAvailable = true
+      this.introMiniBoostGranted = false
+      this.introFirstMoveJuiced = false
+      this.audioLayerStep = 0
+      window.dispatchEvent(new CustomEvent('audio-layer-step', { detail: { step: 0 } }))
       this.player.setSpeedMultiplier(1)
       this.gameStartMs = performance.now()
       this.updateSpeedBoostHud(this.gameStartMs)
@@ -519,6 +537,11 @@ export class Game {
       this.handleLetterCollisions()
     }
 
+    this.wordScrambler.updatePickupReadability(
+      new THREE.Vector2(this.player.mesh.position.x, this.player.mesh.position.y),
+      nowMs,
+    )
+
     this.wordScrambler?.updateStarterLetters(nowMs)
     if (!this.awaitingFirstMove) {
       this.updateEnemies(deltaSeconds, nowMs)
@@ -542,9 +565,10 @@ export class Game {
       this.camera.position.x = targetX
       this.camera.position.y = targetY
     } else {
+      this.cameraJuiceOffset.multiplyScalar(Math.max(0, 1 - deltaSeconds * 8))
       const t = 1 - Math.exp(-this.cameraFollowSpeed * deltaSeconds)
-      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetX, t)
-      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetY, t)
+      this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetX + this.cameraJuiceOffset.x, t)
+      this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetY + this.cameraJuiceOffset.y, t)
     }
     this.camera.position.z = 400
     this.camera.lookAt(this.camera.position.x, this.camera.position.y, 0)
@@ -603,7 +627,8 @@ export class Game {
     for (const letter of this.wordScrambler.getActiveLetters()) {
       if (this.tray.length >= this.currentQuestLength) break
       const lc = letter.getCell()
-      if (lc.x === playerCell.x && lc.y === playerCell.y) {
+      const nearForAssist = this.grid.cellDistance(playerCell, lc) <= 0.95
+      if ((lc.x === playerCell.x && lc.y === playerCell.y) || nearForAssist) {
         this.tray.push(letter.char)
         letter.setActive(false)
         this.wordScrambler.spawnReplacementLetter()
@@ -611,6 +636,8 @@ export class Game {
       }
     }
     if (changed) {
+      this.playPickupTone()
+      this.maybeAdvanceAudioLayer(1)
       this.updateTrayContent()
       this.updateQuestHud()
       if (this.tray.length === this.currentQuestLength && !this.wordCompletionInFlight) {
@@ -709,6 +736,7 @@ export class Game {
       this.player.setSize(this.player.getRadius() + grow)
       this.score += pts
       this.wordsFound += 1
+      if (this.wordsFound >= 1) this.maybeAdvanceAudioLayer(2)
       this.hud?.setScore(this.score)
       this.hud?.setWordsFound(this.wordsFound)
       this.triggerWordShockwave(performance.now())
@@ -939,6 +967,15 @@ export class Game {
       return
     }
 
+    if (
+      !this.introMiniBoostGranted &&
+      this.introMiniBoostAvailable &&
+      nowMs - this.gameStartMs >= INTRO_MINI_BOOST_READY_MS
+    ) {
+      this.introMiniBoostGranted = true
+      this.speedBoostChargeProgressMs = SPEED_BOOST_CHARGE_MS
+    }
+
     if (this.speedBoostActiveUntilMs > nowMs) {
       this.player.setSpeedMultiplier(SPEED_BOOST_MULT)
     } else {
@@ -956,8 +993,10 @@ export class Game {
     if (this.paused || this.awaitingFirstMove) return
     if (this.speedBoostActiveUntilMs > nowMs) return
     if (this.speedBoostChargeProgressMs < SPEED_BOOST_CHARGE_MS) return
+    const introBoost = this.introMiniBoostAvailable && nowMs - this.gameStartMs <= INTRO_WINDOW_MS
     this.speedBoostChargeProgressMs = 0
-    this.speedBoostActiveUntilMs = nowMs + SPEED_BOOST_ACTIVE_MS
+    this.speedBoostActiveUntilMs = nowMs + (introBoost ? INTRO_MINI_BOOST_MS : SPEED_BOOST_ACTIVE_MS)
+    if (introBoost) this.introMiniBoostAvailable = false
     this.player.setSpeedMultiplier(SPEED_BOOST_MULT)
     this.updateSpeedBoostHud(nowMs)
   }
@@ -975,6 +1014,44 @@ export class Game {
     if (this.paused) this.togglePause()
     this.requestReset()
     playInfoCelebration(this.wordCelebrationEl, 'HARD RESET', 'Everything restarted.', 1700)
+  }
+
+  private triggerFirstMoveJuice(dir: Dir): void {
+    if (this.introFirstMoveJuiced) return
+    this.introFirstMoveJuiced = true
+    playInfoCelebration(this.wordCelebrationEl, 'GO!', 'Collect letters and build a word.', 900)
+    this.triggerWordShockwave(performance.now())
+    this.cameraJuiceOffset.set(dir.x * 56, dir.y * 56)
+  }
+
+  private maybeAdvanceAudioLayer(step: number): void {
+    if (step <= this.audioLayerStep) return
+    this.audioLayerStep = step
+    window.dispatchEvent(new CustomEvent('audio-layer-step', { detail: { step } }))
+  }
+
+  private playPickupTone(): void {
+    try {
+      const Ctx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (!Ctx) return
+      if (!this.pickupAudioCtx) this.pickupAudioCtx = new Ctx()
+      const ctx = this.pickupAudioCtx
+      if (ctx.state === 'suspended') void ctx.resume()
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(560, ctx.currentTime)
+      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.05)
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.06, ctx.currentTime + 0.01)
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.08)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start()
+      osc.stop(ctx.currentTime + 0.09)
+    } catch {
+      // best effort
+    }
   }
 
   stop(): void {

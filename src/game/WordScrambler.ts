@@ -322,4 +322,17 @@ export class WordScrambler {
   getActiveLetters(): Letter[] {
     return this.letters.filter((l) => l.isActive())
   }
+
+  updatePickupReadability(playerWorld: THREE.Vector2, nowMs: number): void {
+    void playerWorld
+    void nowMs
+    for (const l of this.letters) {
+      if (!l.isActive()) continue
+      if (this.starterLetterSet.has(l)) continue
+      const mat = l.sprite.material as THREE.SpriteMaterial
+      l.sprite.scale.setScalar(this.letterRadius)
+      l.sprite.position.z = 1
+      mat.opacity = 1
+    }
+  }
 }

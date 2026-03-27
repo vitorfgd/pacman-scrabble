@@ -123,6 +123,8 @@ export class Enemy {
 
   private patrolDir: Dir = { x: 1, y: 0 }
   private patrolTurnTimer = 0
+  private patrolInterestTimer = 0
+  private patrolStepsInDir = 0
 
   private readonly enemyBlue = new THREE.Color(0x2a7fff)
   private readonly ghostTextureByRole = new Map<EnemyRole, THREE.Texture>()
@@ -187,6 +189,25 @@ export class Enemy {
     return { x: d.x, y: d.y }
   }
 
+  private scorePatrolNeighbor(candidate: Cell, playerCell: Cell, usePlayerNudge: boolean): number {
+    const dx = candidate.x - this.cell.x
+    const dy = candidate.y - this.cell.y
+    let score = Math.random() * 0.2
+    // Keep some momentum, but avoid endless straight lines.
+    if (dx === this.patrolDir.x && dy === this.patrolDir.y) score += 0.35
+    if (this.patrolStepsInDir >= 3 && dx === this.patrolDir.x && dy === this.patrolDir.y) score -= 0.55
+
+    if (usePlayerNudge) {
+      const dNow = this.grid.cellDistanceSq(this.cell, playerCell)
+      const dNext = this.grid.cellDistanceSq(candidate, playerCell)
+      if (dNow > 20) {
+        // Gentle pull toward player only when far, not direct pursuit.
+        score += (dNow - dNext) * 0.045
+      }
+    }
+    return score
+  }
+
   setActive(active: boolean, cell: Cell, baseRadius: number, role: EnemyRole = 'stealer'): void {
     this.active = active
     this.mesh.visible = active
@@ -208,6 +229,8 @@ export class Enemy {
 
     this.patrolDir = this.randomPatrolDir()
     this.patrolTurnTimer = 0.9 + Math.random() * 2.2
+    this.patrolInterestTimer = 0.55 + Math.random() * 1.4
+    this.patrolStepsInDir = 0
     this.pulseTimer = Math.random() * Math.PI * 2
 
     const hue = (ROLE_HUE[role] + (Math.random() - 0.5) * 0.06 + 1) % 1
@@ -273,25 +296,43 @@ export class Enemy {
         }
       }
     } else {
-      // Patrol: follow patrolDir; on wall hit, pick a new heading or a random open neighbor.
+      // Patrol: mostly wander, with occasional soft nudges toward player.
       this.patrolTurnTimer -= deltaSeconds
-      if (this.patrolTurnTimer <= 0) {
+      this.patrolInterestTimer -= deltaSeconds
+      const wantTurn = this.patrolTurnTimer <= 0 || this.patrolStepsInDir >= 4
+      if (wantTurn) {
         this.patrolDir = this.randomPatrolDir()
-        this.patrolTurnTimer = 0.8 + Math.random() * 2.4
+        this.patrolTurnTimer = 0.45 + Math.random() * 1.45
       }
 
       const desired = this.clampCellToSafeRange(this.grid.dirToTargetCell(this.cell, this.patrolDir))
       const blocked = desired.x === this.cell.x && desired.y === this.cell.y
-      if (blocked) {
-        this.patrolDir = this.randomPatrolDir()
-        const alt = this.clampCellToSafeRange(this.grid.dirToTargetCell(this.cell, this.patrolDir))
-        if (alt.x !== this.cell.x || alt.y !== this.cell.y) {
-          next = alt
-        } else {
-          next = neighbors[Math.floor(Math.random() * neighbors.length)] ?? this.cell
+      const shouldSoftNudge = this.patrolInterestTimer <= 0 && Math.random() < 0.62
+
+      if (blocked || wantTurn || shouldSoftNudge) {
+        if (shouldSoftNudge) this.patrolInterestTimer = 0.8 + Math.random() * 1.6
+        let best = -Infinity
+        for (const c of neighbors) {
+          if (c.x === this.cell.x && c.y === this.cell.y) continue
+          const score = this.scorePatrolNeighbor(c, playerCell, shouldSoftNudge)
+          if (score > best) {
+            best = score
+            next = c
+          }
         }
       } else {
         next = desired
+      }
+
+      const stepDx = next.x - this.cell.x
+      const stepDy = next.y - this.cell.y
+      if (stepDx !== 0 || stepDy !== 0) {
+        if (stepDx === this.patrolDir.x && stepDy === this.patrolDir.y) {
+          this.patrolStepsInDir++
+        } else {
+          this.patrolDir = { x: Math.sign(stepDx) as -1 | 0 | 1, y: Math.sign(stepDy) as -1 | 0 | 1 }
+          this.patrolStepsInDir = 1
+        }
       }
     }
 
