@@ -9,7 +9,7 @@ import { WordValidator } from './WordValidator'
 import { getLetterScore, isVowelLetter } from './LetterScoring'
 import { Grid, type Dir } from './Grid'
 import { Hud } from '../ui/hud'
-import { playInfoCelebration, playResetCelebration, playSubmissionFail, playWordCelebration } from '../ui/wordCelebration'
+import { playEnemyHitEffect, playInfoCelebration, playResetCelebration, playSubmissionFail, playWordCelebration } from '../ui/wordCelebration'
 
 export type GameOptions = { container: HTMLElement }
 
@@ -36,6 +36,10 @@ const QUEST_SCHEDULE = [
 const SPEED_BOOST_CHARGE_MS = 18000
 const SPEED_BOOST_ACTIVE_MS = 2000
 const SPEED_BOOST_MULT = 1.6
+const ENEMY_BASE_SPEED_MULT = 0.78
+const GRID_CELL_SCALE = 1.25
+const BASE_GRID_DIVISIONS = 64
+const RANDOM_LETTER_FREQUENCY = 'eeeeeeeeeeeeeeeeetttttttttaaaaaaaaooooooooooiiiiiiiiinnnnnnnnssssssssrrrrrrrrrrhhhhhhhhddddlllllluuuuuuuuuuccccccuummmmmmwwwwwwwwffggggggyyypppbbvvkjxqz'
 
 /** Enemies chase only inside this radius (grid cells, Euclidean). */
 const CHASE_ENTER_CELLS = 4
@@ -180,7 +184,7 @@ export class Game {
     this.scene.add(dir)
 
     const themeMode: ThemeMode = 'dark'
-    const gridDivisions = 64
+    const gridDivisions = Math.max(10, Math.round(BASE_GRID_DIVISIONS / GRID_CELL_SCALE))
     this.grid = new Grid(this.bounds, gridDivisions)
     const gridTex = createGridCellTileTexture(512, themeMode)
     gridTex.repeat.set(this.grid.divisions, this.grid.divisions)
@@ -243,6 +247,10 @@ export class Game {
       if (ev.code === 'ArrowLeft' || ev.code === 'KeyA') return set({ x: -1, y: 0 })
       if (ev.code === 'ArrowRight' || ev.code === 'KeyD') return set({ x: 1, y: 0 })
       if (ev.code === 'KeyR') this.resetTray()
+      if (ev.code === 'Backspace') {
+        ev.preventDefault()
+        this.putBackLastTrayLetter()
+      }
       if (ev.code === 'KeyP') this.togglePause()
       if (ev.code === 'KeyH') this.hardResetGame()
     })
@@ -313,30 +321,31 @@ export class Game {
   }
 
   private computeViewportProfile(): ViewportProfile {
+    const s = GRID_CELL_SCALE
     const portrait = this.isPortraitMode()
     if (!portrait) {
       return {
-        cameraViewHeightWorld: 1380,
-        playerSize: 28,
-        letterRadius: 42,
-        starterScale: 58,
-        starterSpacing: 92,
+        cameraViewHeightWorld: 1380 * s,
+        playerSize: 28 * s,
+        letterRadius: 42 * s,
+        starterScale: 58 * s,
+        starterSpacing: 92 * s,
         enemyCount: 36,
-        enemyBaseRadiusScale: 1,
-        enemyMinSpawnDist: 1050,
-        enemyMaxSpawnDist: Math.min(2680, this.mapSize / 2 - 80),
+        enemyBaseRadiusScale: 1 * s,
+        enemyMinSpawnDist: 1050 * s,
+        enemyMaxSpawnDist: Math.min(2680 * s, this.mapSize / 2 - 80),
       }
     }
     return {
-      cameraViewHeightWorld: 1700,
-      playerSize: 34,
-      letterRadius: 56,
-      starterScale: 72,
-      starterSpacing: 104,
+      cameraViewHeightWorld: 1700 * s,
+      playerSize: 34 * s,
+      letterRadius: 56 * s,
+      starterScale: 72 * s,
+      starterSpacing: 104 * s,
       enemyCount: 30,
-      enemyBaseRadiusScale: 0.92,
-      enemyMinSpawnDist: 1100,
-      enemyMaxSpawnDist: Math.min(2620, this.mapSize / 2 - 80),
+      enemyBaseRadiusScale: 0.92 * s,
+      enemyMinSpawnDist: 1100 * s,
+      enemyMaxSpawnDist: Math.min(2620 * s, this.mapSize / 2 - 80),
     }
   }
 
@@ -363,6 +372,7 @@ export class Game {
       this.hud.setOnPauseToggle(() => this.togglePause())
       this.hud.setOnHardReset(() => this.hardResetGame())
       this.hud.setOnSpeedBoost(() => this.activateSpeedBoost(performance.now()))
+      this.hud.setOnPutBackLetter(() => this.putBackLastTrayLetter())
       this.hud.setPauseButtonState(false)
 
       // Cache DOM refs
@@ -429,13 +439,13 @@ export class Game {
     }
   }
 
-  // Role distribution: weighted random (mostly chasers, some interceptors, pins).
+  // Role distribution: weighted random across the three gameplay behaviors.
   private pickEnemyRole(index: number): EnemyRole {
     const r = Math.random()
-    // Slight bias by index so early enemies are simpler (closer spawn = chaser).
-    if (index < 4 || r < 0.45) return 'chaser'
-    if (r < 0.77) return 'interceptor'
-    return 'pin'
+    // Slight bias so early nearby enemies are often "giver" to ease onboarding.
+    if (index < 4 || r < 0.34) return 'giver'
+    if (r < 0.67) return 'shuffler'
+    return 'stealer'
   }
 
   private spawnInitialEnemies() {
@@ -450,7 +460,7 @@ export class Game {
       this.enemyPool[i].setActive(false, { x: 0, y: 0 }, 10)
     }
     for (let i = 0; i < count; i++) {
-      const r = (18 + Math.random() * 20) * this.viewportProfile.enemyBaseRadiusScale
+      const r = this.viewportProfile.playerSize
       const margin = r * 2
       const t = (i + 0.5) / Math.max(1, count)
       const dist = minSpawnDist + t * (maxSpawnDist - minSpawnDist)
@@ -672,6 +682,7 @@ export class Game {
         totalPoints: pts,
         questComplete: true,
         wordOfDayComplete: isWordOfDay,
+        nextWordOfDayInLabel: isWordOfDay ? this.getTimeUntilNextWordOfDayLabel() : undefined,
       })
 
       this.player.setSize(this.player.getRadius() + grow)
@@ -688,6 +699,20 @@ export class Game {
     } finally {
       this.wordCompletionInFlight = false
     }
+  }
+
+  private getTimeUntilNextWordOfDayLabel(): string {
+    const now = new Date()
+    const next = new Date(now)
+    next.setHours(24, 0, 0, 0)
+    const ms = Math.max(0, next.getTime() - now.getTime())
+    const totalSec = Math.floor(ms / 1000)
+    const h = Math.floor(totalSec / 3600)
+    const m = Math.floor((totalSec % 3600) / 60)
+    const s = totalSec % 60
+    if (h > 0) return `${h}h ${m}m`
+    if (m > 0) return `${m}m ${s}s`
+    return `${s}s`
   }
 
   // ── Enemies ───────────────────────────────────────────────────────────────
@@ -718,6 +743,7 @@ export class Game {
         playerLastDir,
         shouldChase,
         this.powerModeActive,
+        ENEMY_BASE_SPEED_MULT,
       )
 
       const enemyCellAfter = enemy.getCell()
@@ -732,8 +758,35 @@ export class Game {
         this.enemyChaseAggro[i] = false
         enemy.setActive(false, { x: 0, y: 0 }, 10)
       } else {
-        this.requestReset()
-        return
+        const role = enemy.getRole()
+        if (role === 'stealer') {
+          if (this.tray.length > 0) {
+            const stealIndex = Math.floor(Math.random() * this.tray.length)
+            this.tray.splice(stealIndex, 1)
+            this.updateTrayContent()
+            this.updateQuestHud()
+          }
+          playEnemyHitEffect(this.wordCelebrationEl, 'stealer')
+        } else if (role === 'giver') {
+          if (this.tray.length < this.currentQuestLength) {
+            this.tray.push(this.pickRandomLetter())
+            this.updateTrayContent()
+            this.updateQuestHud()
+            if (this.tray.length === this.currentQuestLength && !this.wordCompletionInFlight) {
+              void this.tryCompleteWord()
+            }
+          }
+          playEnemyHitEffect(this.wordCelebrationEl, 'giver')
+        } else {
+          if (this.tray.length > 1) {
+            this.shuffleInPlace(this.tray)
+            this.updateTrayContent()
+            this.updateQuestHud()
+          }
+          playEnemyHitEffect(this.wordCelebrationEl, 'shuffler')
+        }
+        this.enemyChaseAggro[i] = false
+        enemy.setActive(false, { x: 0, y: 0 }, 10)
       }
     }
   }
@@ -752,6 +805,27 @@ export class Game {
     if (returned.length > 0) {
       this.wordScrambler.spawnLettersFromTray(returned)
       this.updateQuestHud()
+    }
+  }
+
+  private putBackLastTrayLetter(): void {
+    if (!this.wordScrambler || this.tray.length === 0) return
+    const letter = this.tray.pop()
+    if (!letter) return
+    this.wordScrambler.spawnLettersFromTray([letter])
+    this.updateTrayContent()
+    this.updateQuestHud()
+  }
+
+  private pickRandomLetter(): string {
+    const idx = Math.floor(Math.random() * RANDOM_LETTER_FREQUENCY.length)
+    return RANDOM_LETTER_FREQUENCY[idx] ?? 'e'
+  }
+
+  private shuffleInPlace<T>(arr: T[]): void {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[arr[i], arr[j]] = [arr[j], arr[i]]
     }
   }
 
@@ -780,7 +854,7 @@ export class Game {
       this.enemyChaseAggro[i] = false
       this.enemyPool[i].setActive(false, { x: 0, y: 0 }, 10)
     }
-    this.fruit.setActive(false, new THREE.Vector2(0, 0), 22)
+    this.fruit.setActive(false, new THREE.Vector2(0, 0), 22 * GRID_CELL_SCALE)
     if (this.shockwaveMesh) { this.shockwaveMesh.visible = false; this.shockwaveActive = false }
 
     this.score = 0
@@ -909,7 +983,7 @@ export class Game {
 
   private maybeSpawnFruit(nowMs: number) {
     if (this.fruit.isActive() || nowMs < this.fruitNextSpawnMs) return
-    const r = 22
+    const r = 22 * GRID_CELL_SCALE
     const raw = new THREE.Vector2(
       THREE.MathUtils.lerp(this.bounds.minX + r, this.bounds.maxX - r, Math.random()),
       THREE.MathUtils.lerp(this.bounds.minY + r, this.bounds.maxY - r, Math.random()),
@@ -926,7 +1000,7 @@ export class Game {
     const fruitCell = this.grid.worldToCell(this.fruit.mesh.position.x, this.fruit.mesh.position.y)
     if (fruitCell.x !== playerCell.x || fruitCell.y !== playerCell.y) return
 
-    this.fruit.setActive(false, new THREE.Vector2(0, 0), 22)
+    this.fruit.setActive(false, new THREE.Vector2(0, 0), 22 * GRID_CELL_SCALE)
     const dur = 10000
     this.powerModeActive = true
     this.powerModeUntilMs = nowMs + dur

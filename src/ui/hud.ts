@@ -8,6 +8,7 @@ export class Hud {
   private readonly menuToggleButtonEl: HTMLButtonElement
   private readonly actionsMenuEl: HTMLElement
   private readonly speedBoostButtonEl: HTMLButtonElement
+  private readonly putBackLetterButtonEl: HTMLButtonElement
   private readonly speedBoostFillEl: HTMLElement
   private readonly speedBoostStatusEl: HTMLElement
   private readonly scoreEl: HTMLElement
@@ -23,6 +24,7 @@ export class Hud {
     const menuToggleButtonEl = document.getElementById('hudMenuToggle') as HTMLButtonElement | null
     const actionsMenuEl = document.getElementById('hudActions')
     const speedBoostButtonEl = document.getElementById('speedBoostButton') as HTMLButtonElement | null
+    const putBackLetterButtonEl = document.getElementById('putBackLetterButton') as HTMLButtonElement | null
     const speedBoostFillEl = document.getElementById('speedBoostFill')
     const speedBoostStatusEl = document.getElementById('speedBoostStatus')
     const scoreEl = document.getElementById('score')
@@ -37,6 +39,7 @@ export class Hud {
     if (!menuToggleButtonEl) throw new Error('Missing #hudMenuToggle button element')
     if (!actionsMenuEl) throw new Error('Missing #hudActions element')
     if (!speedBoostButtonEl) throw new Error('Missing #speedBoostButton element')
+    if (!putBackLetterButtonEl) throw new Error('Missing #putBackLetterButton element')
     if (!speedBoostFillEl) throw new Error('Missing #speedBoostFill element')
     if (!speedBoostStatusEl) throw new Error('Missing #speedBoostStatus element')
     if (!scoreEl) throw new Error('Missing #score element')
@@ -51,6 +54,7 @@ export class Hud {
     this.menuToggleButtonEl = menuToggleButtonEl
     this.actionsMenuEl = actionsMenuEl
     this.speedBoostButtonEl = speedBoostButtonEl
+    this.putBackLetterButtonEl = putBackLetterButtonEl
     this.speedBoostFillEl = speedBoostFillEl
     this.speedBoostStatusEl = speedBoostStatusEl
     this.scoreEl = scoreEl
@@ -120,6 +124,10 @@ export class Hud {
 
   setOnSpeedBoost(handler: () => void): void {
     this.speedBoostButtonEl.addEventListener('click', () => handler())
+  }
+
+  setOnPutBackLetter(handler: () => void): void {
+    this.putBackLetterButtonEl.addEventListener('click', () => handler())
   }
 
   setSpeedBoostState(progress01: number, ready: boolean, active: boolean, remainingMs?: number): void {

@@ -1,18 +1,18 @@
 import * as THREE from 'three'
 import { ENEMY_GRID_CELL_TWEEN_MS, type Cell, type Dir, Grid } from '../Grid'
 
-export type EnemyRole = 'chaser' | 'interceptor' | 'pin'
+export type EnemyRole = 'stealer' | 'giver' | 'shuffler'
 
 const ROLE_SIZE: Record<EnemyRole, number> = {
-  chaser: 1.0,
-  interceptor: 1.0,
-  pin: 1.0,
+  stealer: 1.0,
+  giver: 1.0,
+  shuffler: 1.0,
 }
 
 const ROLE_HUE: Record<EnemyRole, number> = {
-  chaser: 0.0,
-  interceptor: 0.08,
-  pin: 0.77,
+  stealer: 0.0,
+  giver: 0.33,
+  shuffler: 0.77,
 }
 
 const DIRS4: Dir[] = [
@@ -22,14 +22,95 @@ const DIRS4: Dir[] = [
   { x: 0, y: -1 },
 ]
 
+function makeGhostTexture(hue: number): THREE.Texture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Failed to create ghost texture context')
+  ctx.clearRect(0, 0, 256, 256)
+
+  const fill = new THREE.Color().setHSL(hue, 0.9, 0.54)
+  const fillHex = `#${fill.getHexString()}`
+  const shade = new THREE.Color().setHSL(hue, 0.95, 0.35)
+  const shadeHex = `#${shade.getHexString()}`
+
+  ctx.beginPath()
+  ctx.moveTo(44, 160)
+  ctx.lineTo(44, 108)
+  ctx.arc(128, 108, 84, Math.PI, 0, false)
+  ctx.lineTo(212, 160)
+  ctx.lineTo(194, 176)
+  ctx.lineTo(172, 156)
+  ctx.lineTo(148, 178)
+  ctx.lineTo(128, 156)
+  ctx.lineTo(106, 178)
+  ctx.lineTo(84, 156)
+  ctx.lineTo(62, 176)
+  ctx.closePath()
+  ctx.fillStyle = fillHex
+  ctx.fill()
+  ctx.lineWidth = 10
+  ctx.strokeStyle = shadeHex
+  ctx.stroke()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.beginPath()
+  ctx.arc(96, 110, 18, 0, Math.PI * 2)
+  ctx.arc(160, 110, 18, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.fillStyle = '#172036'
+  ctx.beginPath()
+  ctx.arc(101, 114, 8, 0, Math.PI * 2)
+  ctx.arc(165, 114, 8, 0, Math.PI * 2)
+  ctx.fill()
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+function makeRoleIconTexture(role: EnemyRole): THREE.Texture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 128
+  canvas.height = 128
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Failed to create role icon texture context')
+  ctx.clearRect(0, 0, 128, 128)
+
+  let text = '?'
+  let bg = '#445'
+  if (role === 'stealer') { text = '-1'; bg = '#ff6b6b' }
+  if (role === 'giver') { text = '+1'; bg = '#39d98a' }
+  if (role === 'shuffler') { text = '↻'; bg = '#ad7bff' }
+
+  ctx.fillStyle = 'rgba(7,10,18,0.82)'
+  ctx.beginPath()
+  ctx.roundRect(18, 18, 92, 92, 20)
+  ctx.fill()
+  ctx.lineWidth = 5
+  ctx.strokeStyle = bg
+  ctx.stroke()
+  ctx.fillStyle = bg
+  ctx.font = 'bold 44px system-ui, Segoe UI, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(text, 64, 66)
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
 export class Enemy {
   readonly mesh: THREE.Mesh
+  readonly iconSprite: THREE.Sprite
 
   private readonly grid: Grid
 
   private active = false
   private originalRadius = 10
-  private role: EnemyRole = 'chaser'
+  private role: EnemyRole = 'stealer'
   private pulseTimer = 0
 
   private cell: Cell = { x: 0, y: 0 }
@@ -44,23 +125,34 @@ export class Enemy {
   private patrolTurnTimer = 0
 
   private readonly enemyBlue = new THREE.Color(0x2a7fff)
-  private readonly powerShrink = 0.65
-  private originalColor = new THREE.Color(0xff4d4d)
+  private readonly powerShrink = 1
+  private readonly ghostTextureByRole = new Map<EnemyRole, THREE.Texture>()
+  private readonly iconTextureByRole = new Map<EnemyRole, THREE.Texture>()
 
   constructor(grid: Grid) {
     this.grid = grid
 
-    const geometry = new THREE.CircleGeometry(1, 3)
+    const geometry = new THREE.PlaneGeometry(2, 2)
     const material = new THREE.MeshStandardMaterial({
-      color: 0xff4d4d,
-      emissive: new THREE.Color(0xff2200),
-      emissiveIntensity: 0.0,
-      roughness: 0.6,
-      metalness: 0.15,
+      color: 0xffffff,
+      transparent: true,
+      alphaTest: 0.1,
+      roughness: 0.7,
+      metalness: 0.0,
     })
     this.mesh = new THREE.Mesh(geometry, material)
     this.mesh.position.set(0, 0, 0)
     this.mesh.visible = false
+
+    this.iconSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      color: 0xffffff,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    }))
+    this.iconSprite.visible = false
+    this.iconSprite.renderOrder = 12
+    this.mesh.add(this.iconSprite)
   }
 
   isActive(): boolean {
@@ -96,9 +188,10 @@ export class Enemy {
     return { x: d.x, y: d.y }
   }
 
-  setActive(active: boolean, cell: Cell, baseRadius: number, role: EnemyRole = 'chaser'): void {
+  setActive(active: boolean, cell: Cell, baseRadius: number, role: EnemyRole = 'stealer'): void {
     this.active = active
     this.mesh.visible = active
+    this.iconSprite.visible = active
     if (!active) return
 
     this.role = role
@@ -118,11 +211,28 @@ export class Enemy {
     this.patrolTurnTimer = 0.9 + Math.random() * 2.2
     this.pulseTimer = Math.random() * Math.PI * 2
 
+    const hue = (ROLE_HUE[role] + (Math.random() - 0.5) * 0.06 + 1) % 1
     const mat = this.mesh.material as THREE.MeshStandardMaterial
-    const hue = (ROLE_HUE[role] + (Math.random() - 0.5) * 0.07 + 1) % 1
-    mat.color.setHSL(hue, 1.0, 0.52)
-    mat.emissive.setHSL(hue, 1.0, 0.35)
-    this.originalColor = mat.color.clone()
+    const ghostTex = this.ghostTextureByRole.get(role) ?? makeGhostTexture(hue)
+    this.ghostTextureByRole.set(role, ghostTex)
+    mat.map = ghostTex
+    mat.color.set(0xffffff)
+    mat.emissive.set(0x000000)
+    mat.emissiveIntensity = 0
+    mat.needsUpdate = true
+
+    const iconTex = this.iconTextureByRole.get(role) ?? makeRoleIconTexture(role)
+    this.iconTextureByRole.set(role, iconTex)
+    const iconMat = this.iconSprite.material as THREE.SpriteMaterial
+    iconMat.map = iconTex
+    iconMat.needsUpdate = true
+    // iconSprite is parented to mesh, so keep local transforms normalized.
+    // This keeps the badge visually consistent in world-space and very close
+    // to the ghost head instead of exploding with parent scale.
+    const desiredBadgeWorldSize = Math.max(14, r * 2.25)
+    const badgeLocalScale = desiredBadgeWorldSize / Math.max(1e-6, r)
+    this.iconSprite.scale.setScalar(badgeLocalScale)
+    this.iconSprite.position.set(0, 2.25, 0.3)
   }
 
   private pickNextCell(
@@ -146,16 +256,13 @@ export class Enemy {
       }
     } else if (shouldChase) {
       let target: Cell = playerCell
-      if (this.role === 'interceptor') {
-        const ahead = 3
-        target = { x: playerCell.x + playerLastMoveDir.x * ahead, y: playerCell.y + playerLastMoveDir.y * ahead }
-        target = this.clampCellToSafeRange(this.grid.clampCell(target))
-      } else if (this.role === 'pin') {
-        const ahead = 2
-        if (playerLastMoveDir.x !== 0 || playerLastMoveDir.y !== 0) {
-          target = { x: playerCell.x + playerLastMoveDir.x * ahead, y: playerCell.y + playerLastMoveDir.y * ahead }
-          target = this.clampCellToSafeRange(this.grid.clampCell(target))
+      if (playerLastMoveDir.x !== 0 || playerLastMoveDir.y !== 0) {
+        // Tiny forward bias keeps movement feeling less robotic when chasing.
+        target = {
+          x: playerCell.x + playerLastMoveDir.x,
+          y: playerCell.y + playerLastMoveDir.y,
         }
+        target = this.clampCellToSafeRange(this.grid.clampCell(target))
       }
 
       let best = Infinity
@@ -217,6 +324,7 @@ export class Enemy {
     playerLastMoveDir: Dir,
     shouldChase: boolean,
     fleeMode: boolean,
+    moveSpeedMultiplier = 1,
   ): void {
     if (!this.active) return
 
@@ -225,7 +333,8 @@ export class Enemy {
     if (!fleeMode) mat.emissiveIntensity = 0.25 + 0.55 * Math.abs(Math.sin(this.pulseTimer))
 
     if (this.tweening && this.toCell) {
-      this.tweenProgress += (deltaSeconds * 1000) / ENEMY_GRID_CELL_TWEEN_MS
+      const tweenMs = ENEMY_GRID_CELL_TWEEN_MS / Math.max(0.1, moveSpeedMultiplier)
+      this.tweenProgress += (deltaSeconds * 1000) / tweenMs
       if (this.tweenProgress >= 1) {
         this.tweenProgress = 1
         this.finishTween()
@@ -249,12 +358,14 @@ export class Enemy {
     if (!this.active) return
     if (active) {
       mat.color.copy(this.enemyBlue)
-      mat.emissive.set(0x0044aa)
+      mat.emissive.set(0x1d4a99)
       this.mesh.scale.setScalar(this.originalRadius * this.powerShrink)
+      this.iconSprite.visible = false
     } else {
-      mat.color.copy(this.originalColor)
-      mat.emissive.copy(this.originalColor).multiplyScalar(0.6)
+      mat.color.set(0xffffff)
+      mat.emissive.set(0x000000)
       this.mesh.scale.setScalar(this.originalRadius)
+      this.iconSprite.visible = true
     }
   }
 }

@@ -611,12 +611,12 @@ canvas {
   display: none;
 }
 
-.speed-boost-button {
+.put-back-letter-button {
   position: fixed;
-  left: 50%;
+  left: calc(env(safe-area-inset-left, 0px) + 12px);
   bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
-  transform: translateX(-50%);
-  width: min(92vw, 280px);
+  width: min(42vw, 164px);
+  min-height: 64px;
   border-radius: 12px;
   border: 1px solid rgba(130, 190, 255, 0.35);
   background: rgba(11, 16, 32, 0.85);
@@ -627,8 +627,31 @@ canvas {
   cursor: pointer;
 }
 
+.put-back-letter-button:hover {
+  background: rgba(15, 22, 44, 0.95);
+}
+
+.speed-boost-button {
+  position: fixed;
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  width: min(92vw, 292px);
+  min-height: 64px;
+  border-radius: 12px;
+  border: 1px solid rgba(130, 190, 255, 0.35);
+  background: rgba(11, 16, 32, 0.85);
+  color: #eef7ff;
+  padding: 10px 12px 11px;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  cursor: pointer;
+  z-index: 260;
+  display: block;
+  pointer-events: auto;
+}
+
 .speed-boost-button:disabled {
   cursor: default;
+  opacity: 0.86;
 }
 
 .speed-boost-label {
@@ -1270,7 +1293,17 @@ body {
   }
 
   .speed-boost-button {
-    width: min(94vw, 260px);
+    width: min(58vw, 260px);
+    min-height: 58px;
+    padding: 8px 10px 9px;
+    right: calc(env(safe-area-inset-right, 0px) + 8px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  }
+
+  .put-back-letter-button {
+    width: min(38vw, 148px);
+    min-height: 58px;
+    left: calc(env(safe-area-inset-left, 0px) + 8px);
     bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
     padding: 8px 10px 9px;
   }

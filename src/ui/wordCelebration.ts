@@ -40,6 +40,11 @@ const CONFETTI_COLORS = [
 ]
 
 const FAIL_PARTICLE_COLORS = ['#ff3b3b', '#ff6b6b', '#ff2e2e', '#ff4d4d']
+const ENEMY_HIT_COLORS: Record<'stealer' | 'giver' | 'shuffler', string[]> = {
+  stealer: ['#ff6b6b', '#ff8b8b', '#ff4d6d', '#ffc2c2'],
+  giver: ['#39d98a', '#5af7a8', '#65e572', '#bcffd8'],
+  shuffler: ['#ad7bff', '#c79dff', '#7a82ff', '#e1d2ff'],
+}
 
 export type WordCelebrationDetails = {
   letters: string[]
@@ -48,6 +53,7 @@ export type WordCelebrationDetails = {
   totalPoints: number
   questComplete?: boolean
   wordOfDayComplete?: boolean
+  nextWordOfDayInLabel?: string
 }
 
 function getCelebrationTiming(details?: WordCelebrationDetails): { clearMs: number } {
@@ -119,7 +125,9 @@ export function playWordCelebration(
   const praise = document.createElement('div')
   praise.className = wodMode ? 'word-praise word-praise-wod' : questMode ? 'word-praise word-praise-quest' : 'word-praise'
   praise.textContent = wodMode
-    ? 'WORD OF THE DAY!'
+    ? (details?.nextWordOfDayInLabel
+      ? `NEXT WORD OF THE DAY IN ${details.nextWordOfDayInLabel}`
+      : 'WORD OF THE DAY!')
     : questMode
       ? PRAISE_QUEST[Math.floor(Math.random() * PRAISE_QUEST.length)]
       : PRAISE[Math.floor(Math.random() * PRAISE.length)]
@@ -280,6 +288,56 @@ export function playInfoCelebration(
   window.setTimeout(() => {
     container.innerHTML = ''
   }, clearMs)
+}
+
+export function playEnemyHitEffect(
+  container: HTMLElement | null,
+  role: 'stealer' | 'giver' | 'shuffler',
+): void {
+  if (!container) return
+  container.innerHTML = ''
+
+  let title = 'HIT!'
+  let subtitle = ''
+  if (role === 'stealer') subtitle = 'Stealer ghost removed 1 letter.'
+  if (role === 'giver') subtitle = 'Giver ghost added 1 random letter.'
+  if (role === 'shuffler') subtitle = 'Shuffler ghost mixed your tray.'
+  if (role === 'stealer') title = 'LETTER STOLEN'
+  if (role === 'giver') title = 'LETTER GIFT'
+  if (role === 'shuffler') title = 'TRAY SHUFFLED'
+
+  const colors = ENEMY_HIT_COLORS[role]
+  const count = 52
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div')
+    p.className = 'confetti-piece confetti-piece-late'
+    p.style.left = `${Math.random() * 100}%`
+    p.style.top = `${-4 + Math.random() * 18}%`
+    p.style.width = `${4 + Math.random() * 9}px`
+    p.style.height = `${4 + Math.random() * 12}px`
+    p.style.setProperty('--drift', `${-90 + Math.random() * 180}px`)
+    p.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)] ?? '#ffffff'
+    p.style.animationDelay = `${Math.random() * 0.12}s`
+    p.style.animationDuration = `${0.75 + Math.random() * 0.45}s`
+    p.style.borderRadius = Math.random() > 0.45 ? '2px' : '50%'
+    container.appendChild(p)
+  }
+
+  const stack = document.createElement('div')
+  stack.className = 'word-cele-stack'
+  const headline = document.createElement('div')
+  headline.className = 'reset-cele-title'
+  headline.textContent = title
+  stack.appendChild(headline)
+  const sub = document.createElement('div')
+  sub.className = 'reset-cele-subtitle'
+  sub.textContent = subtitle
+  stack.appendChild(sub)
+  container.appendChild(stack)
+
+  window.setTimeout(() => {
+    container.innerHTML = ''
+  }, 1200)
 }
 
 let errorAudioCtx: AudioContext | null = null
