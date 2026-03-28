@@ -2,7 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [version3]
+    branches: [version3, version4]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,18 +18,73 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout version3
+        uses: actions/checkout@v4
+        with:
+          ref: version3
+          path: src-v3
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: Verify dist index is production-built
-        run: node -e "const fs=require('fs'); const s=fs.readFileSync('dist/index.html','utf8'); if(s.includes('/src/main.ts')){console.error('dist/index.html still references /src/main.ts (wrong deploy payload)'); process.exit(1)}"
+          cache-dependency-path: src-v3/package-lock.json
+
+      - name: Build version3 → deploy/v3
+        working-directory: src-v3
+        env:
+          GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/v3/
+        run: |
+          npm ci
+          npm run build
+          node -e "const fs=require('fs'); const s=fs.readFileSync('dist/index.html','utf8'); if(s.includes('/src/main.ts')){console.error('dist/index.html still references /src/main.ts'); process.exit(1)}"
+
+      - name: Checkout version4
+        uses: actions/checkout@v4
+        with:
+          ref: version4
+          path: src-v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: src-v4/package-lock.json
+
+      - name: Build version4 → deploy/v4
+        working-directory: src-v4
+        env:
+          GITHUB_PAGES_BASE: /${{ github.event.repository.name }}/v4/
+        run: |
+          npm ci
+          npm run build
+          node -e "const fs=require('fs'); const s=fs.readFileSync('dist/index.html','utf8'); if(s.includes('/src/main.ts')){console.error('dist/index.html still references /src/main.ts'); process.exit(1)}"
+
+      - name: Assemble site (v3 + v4 + root redirect)
+        run: |
+          mkdir -p deploy
+          cp -r src-v3/dist deploy/v3
+          cp -r src-v4/dist deploy/v4
+          cat > deploy/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>PacMan Scrabble</title>
+            <meta http-equiv="refresh" content="0; url=v4/" />
+            <style>body{font-family:system-ui,sans-serif;padding:2rem;max-width:32rem;margin:auto}</style>
+          </head>
+          <body>
+            <p>Redirecting to <a href="v4/">version 4</a>…</p>
+            <p><a href="v3/">Version 3</a> · <a href="v4/">Version 4</a></p>
+          </body>
+          </html>
+          EOF
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/
+          path: deploy/
 
   deploy:
     needs: build
