@@ -1,17 +1,31 @@
 import * as THREE from 'three'
 
+/** Local box depth (Z) before root scale — thicker tile reads clearly as 3D from the angled camera. */
+export const LETTER_TILE_DEPTH = 0.16
+
 export class Letter {
   char: string
-  readonly sprite: THREE.Sprite
+  /** Group containing the letter tile mesh (scaled + positioned in world). */
+  readonly root: THREE.Group
+  readonly topMaterial: THREE.MeshPhysicalMaterial
+  readonly sideMaterial: THREE.MeshStandardMaterial
   readonly radius: number
 
   private active = false
 
-  constructor(sprite: THREE.Sprite, char: string, radius: number) {
-    this.sprite = sprite
+  constructor(
+    root: THREE.Group,
+    topMaterial: THREE.MeshPhysicalMaterial,
+    sideMaterial: THREE.MeshStandardMaterial,
+    char: string,
+    radius: number,
+  ) {
+    this.root = root
+    this.topMaterial = topMaterial
+    this.sideMaterial = sideMaterial
     this.char = char
     this.radius = radius
-    this.sprite.visible = false
+    this.root.visible = false
   }
 
   setChar(char: string): void {
@@ -20,11 +34,10 @@ export class Letter {
 
   setActive(active: boolean): void {
     this.active = active
-    this.sprite.visible = active
+    this.root.visible = active
   }
 
   isActive(): boolean {
     return this.active
   }
 }
-

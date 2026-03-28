@@ -2,14 +2,15 @@ import * as THREE from 'three'
 import { Player } from './entities/Player'
 import { Enemy } from './entities/Enemy'
 import { Fruit } from './entities/Fruit'
-import { WordScrambler } from './WordScrambler'
+import { WordScrambler, BODY_LETTER_Z_LIFT, letterAnchorZFromRootScale } from './WordScrambler'
 import { WordSource } from './WordSource'
 import { WordPartitioner } from './WordPartitioner'
 import { SnakeTrail } from './SnakeTrail'
-import { Letter } from './entities/Letter'
+import { Letter, LETTER_TILE_DEPTH } from './entities/Letter'
 import { CoinPickup } from './entities/CoinPickup'
 import { isVowelLetter } from './LetterScoring'
 import { AmbientBlobs } from './ambientBlobs'
+import { createSimpleWaterShaderMaterial } from './simpleWater'
 import { drawSafeZoneCircleHeadTexture } from './safeZoneCircleTexture'
 import {
   SKINS,
@@ -46,36 +47,49 @@ type ViewportProfile = {
   enemyMaxSpawnDist: number
 }
 
-function createGridTexture(gridSizePx = 512, lineEveryPx = 64, themeMode: ThemeMode): THREE.Texture {
+/** Procedural ocean surface: deep water + lighter bands + soft foam streaks (scrolls in Game). */
+function createOceanTexture(gridSizePx = 512, _themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
   canvas.width = gridSizePx
   canvas.height = gridSizePx
 
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Failed to create canvas context for grid')
+  if (!ctx) throw new Error('Failed to create canvas context for ocean')
 
-  if (themeMode === 'dark') {
-    ctx.fillStyle = '#0d0d16'
-  } else {
-    ctx.fillStyle = '#eef2ff'
-  }
+  const g = ctx.createLinearGradient(0, 0, gridSizePx, gridSizePx)
+  g.addColorStop(0, '#06182c')
+  g.addColorStop(0.35, '#0a2844')
+  g.addColorStop(0.65, '#0c3252')
+  g.addColorStop(1, '#071a2e')
+  ctx.fillStyle = g
   ctx.fillRect(0, 0, gridSizePx, gridSizePx)
 
-  ctx.strokeStyle = themeMode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(27,31,48,0.06)'
-  ctx.lineWidth = 1
-
-  for (let x = 0; x <= gridSizePx; x += lineEveryPx) {
+  ctx.strokeStyle = 'rgba(120, 200, 255, 0.07)'
+  ctx.lineWidth = 2
+  for (let i = 0; i < 18; i++) {
+    const y = (i / 18) * gridSizePx + (i % 3) * 4
     ctx.beginPath()
-    ctx.moveTo(x, 0)
-    ctx.lineTo(x, gridSizePx)
+    ctx.moveTo(0, y)
+    ctx.lineTo(gridSizePx, y + Math.sin(i * 0.7) * 6)
     ctx.stroke()
   }
 
-  for (let y = 0; y <= gridSizePx; y += lineEveryPx) {
+  ctx.strokeStyle = 'rgba(200, 235, 255, 0.045)'
+  ctx.lineWidth = 1.2
+  for (let x = 0; x < gridSizePx; x += 48) {
     ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(gridSizePx, y)
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x + 20, gridSizePx)
     ctx.stroke()
+  }
+
+  ctx.fillStyle = 'rgba(180, 230, 255, 0.04)'
+  for (let k = 0; k < 40; k++) {
+    const px = (Math.sin(k * 2.1) * 0.5 + 0.5) * gridSizePx
+    const py = (Math.cos(k * 1.7) * 0.5 + 0.5) * gridSizePx
+    ctx.beginPath()
+    ctx.arc(px, py, 2 + (k % 4), 0, Math.PI * 2)
+    ctx.fill()
   }
 
   const texture = new THREE.CanvasTexture(canvas)
@@ -90,11 +104,27 @@ export class Game {
   private readonly container: HTMLElement
 
   private scene: THREE.Scene
-  private camera: THREE.OrthographicCamera
+  private camera: THREE.PerspectiveCamera
   private renderer: THREE.WebGLRenderer
+
+  /** Smoothed look-at point on the ground plane (XY, z = 0). */
+  private cameraLookX = 0
+  private cameraLookY = 0
+  /** World offset from look-at along −Y; lower = steeper (more top-down) when paired with `cameraUpZ`. */
+  private readonly cameraBackY = 1120
+  /** World Z above the look point; higher vs `cameraBackY` = closer to vertical (still not 90°). */
+  private readonly cameraUpZ = 2120
+  /** Slightly narrow FOV for a bit more zoom / less edge stretch. */
+  private readonly cameraFov = 45
+
+  /** Shrink logical play area inside the map so the player and AI stay clear of walls / floor overlap. */
+  private readonly arenaInset = 52
 
   private player: Player
   private gridPlane: THREE.Mesh
+  private oceanTexture: THREE.Texture | null = null
+  /** Procedural ocean shader; uniforms updated in `update` when active. */
+  private waterMaterial: THREE.ShaderMaterial | null = null
 
   /** World span (smaller arena = more pressure + shorter chases). */
   private readonly mapSize = 3600
@@ -219,7 +249,7 @@ export class Game {
   private running = false
   private lastMs = 0
   private initialPlayerSize = 28
-  private cameraViewHeightWorld = 1780
+  private cameraViewHeightWorld = 1500
   private readonly cameraFollowSpeed = 5.2
   private viewportProfile: ViewportProfile = this.computeViewportProfile()
 
@@ -227,32 +257,56 @@ export class Game {
     this.container = options.container
 
     this.scene = new THREE.Scene()
+    this.scene.background = new THREE.Color(0x061a2c)
+    this.scene.fog = new THREE.FogExp2(0x081c30, 0.000078)
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: 'high-performance',
     })
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio ?? 1))
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.08
     this.container.appendChild(this.renderer.domElement)
 
-    this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 5000)
-    this.camera.position.set(0, 0, 400)
+    this.camera = new THREE.PerspectiveCamera(this.cameraFov, 1, 0.1, 24000)
+    this.cameraLookX = 0
+    this.cameraLookY = 0
+    this.camera.position.set(0, -this.cameraBackY, this.cameraUpZ)
     this.camera.lookAt(0, 0, 0)
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.5)
+    const ambient = new THREE.AmbientLight(0xf2f6ff, 0.62)
     this.scene.add(ambient)
-    const dir = new THREE.DirectionalLight(0xffffff, 0.85)
-    dir.position.set(0.3, 0.4, 1)
+    const dir = new THREE.DirectionalLight(0xffffff, 1.02)
+    dir.position.set(0.35, 0.5, 1)
     this.scene.add(dir)
+    const fill = new THREE.DirectionalLight(0xc8dcff, 0.42)
+    fill.position.set(-0.85, -0.2, 0.45)
+    this.scene.add(fill)
 
     const themeMode: ThemeMode = 'dark'
-    const gridTex = createGridTexture(512, 64, themeMode)
-    const gridMat = new THREE.MeshStandardMaterial({ map: gridTex, roughness: 1, metalness: 0 })
+    const gridTex = createOceanTexture(512, themeMode)
+    this.oceanTexture = gridTex
+    const gridMat = new THREE.MeshStandardMaterial({
+      map: gridTex,
+      roughness: 0.55,
+      metalness: 0,
+      emissive: new THREE.Color(0x061a28),
+      emissiveIntensity: 0.12,
+    })
+    gridMat.polygonOffset = true
+    gridMat.polygonOffsetFactor = 2
+    gridMat.polygonOffsetUnits = 2
     gridTex.repeat.set(8, 8)
     this.gridPlane = new THREE.Mesh(new THREE.PlaneGeometry(this.mapSize, this.mapSize), gridMat)
+    /** Slightly below z=0 so units above the floor don’t depth-fight with the terrain. */
+    this.gridPlane.position.z = -0.025
     this.scene.add(this.gridPlane)
+    this.addArenaWalls(themeMode)
 
-    this.ambientBlobs = new AmbientBlobs(8, this.bounds, this.submitZone)
+    this.recomputeBounds()
+    this.ambientBlobs = new AmbientBlobs(8, this.playBounds(), this.submitZone)
     this.scene.add(this.ambientBlobs.group)
 
     this.player = new Player()
@@ -276,7 +330,6 @@ export class Game {
     this.shockwaveMesh.visible = false
     this.scene.add(this.shockwaveMesh)
 
-    this.recomputeBounds()
     this.setupInput()
     this.onResize()
 
@@ -285,6 +338,46 @@ export class Game {
   private recomputeBounds() {
     const half = this.mapSize / 2
     this.bounds = { minX: -half, maxX: half, minY: -half, maxY: half }
+  }
+
+  /** Map bounds inset from the rim — use for movement, spawns, and camera so nothing sits in the wall strip. */
+  private playBounds(): Bounds {
+    const p = this.arenaInset
+    const b = this.bounds
+    return {
+      minX: b.minX + p,
+      maxX: b.maxX - p,
+      minY: b.minY + p,
+      maxY: b.maxY - p,
+    }
+  }
+
+  /** Raised rim around the playfield so the arena reads as a 3D volume. */
+  private addArenaWalls(themeMode: ThemeMode): void {
+    const half = this.mapSize / 2
+    const wallH = 320
+    const t = 70
+    const wallColor = themeMode === 'dark' ? 0x152535 : 0xd8dce8
+    const emissive = themeMode === 'dark' ? 0x081820 : 0xeef2ff
+    const mat = new THREE.MeshStandardMaterial({
+      color: wallColor,
+      emissive,
+      emissiveIntensity: themeMode === 'dark' ? 0.18 : 0.06,
+      metalness: 0,
+      roughness: 0.78,
+    })
+    const floorLift = 0.04
+    const add = (w: number, d: number, cx: number, cy: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, d, wallH), mat)
+      m.position.set(cx, cy, floorLift + wallH * 0.5)
+      m.castShadow = false
+      m.receiveShadow = false
+      this.scene.add(m)
+    }
+    add(this.mapSize + t * 2, t, 0, half + t * 0.5)
+    add(this.mapSize + t * 2, t, 0, -half - t * 0.5)
+    add(t, this.mapSize + t * 2, half + t * 0.5, 0)
+    add(t, this.mapSize + t * 2, -half - t * 0.5, 0)
   }
 
   private applySkinDef(skin: SkinDef): void {
@@ -339,21 +432,34 @@ export class Game {
   }
 
   private styleBodyLetterForSkin(letter: Letter): void {
-    const mat = letter.sprite.material as THREE.SpriteMaterial
+    const top = letter.topMaterial
+    const side = letter.sideMaterial
     if (this.equippedSkinId === 'safezone') {
-      mat.color.set(0xffffff)
+      top.color.set(0xffffff)
+      top.emissive.set(0x444458)
+      top.emissiveIntensity = 0.18
+      side.color.set(0xc8c8dc)
     } else {
       const vowel = isVowelLetter(letter.char)
-      mat.color.set(vowel ? 0x6bcb77 : 0xc084fc)
+      top.color.set(0xffffff)
+      if (vowel) {
+        side.color.set(0x2a4a58)
+        top.emissive.set(0x224438)
+      } else {
+        side.color.set(0x3a3858)
+        top.emissive.set(0x302848)
+      }
+      top.emissiveIntensity = 0.11
     }
-    mat.needsUpdate = true
+    top.needsUpdate = true
+    side.needsUpdate = true
   }
 
   private refreshAllBodyLetterSkinStyles(): void {
     for (const L of this.playerBodyLetters) this.styleBodyLetterForSkin(L)
   }
 
-  /** HTML tray rings + text track the same palette as the player head. */
+  /** HTML tray chips + text track the same palette as the player head. */
   private applyTrayColorsFromSkin(skin: SkinDef): void {
     const hr = (skin.headColor >> 16) & 255
     const hg = (skin.headColor >> 8) & 255
@@ -504,17 +610,18 @@ export class Game {
   }
 
   /**
-   * Small fixed-ish tray glyphs: does not track tail length or camera tail-zoom,
-   * so circles stay compact (only scales slightly with viewport height on resize).
+   * Tray letter chips (rounded rects, not circles): scales slightly with viewport height.
    */
-  private syncTrayLetterCircleSizes(): void {
+  private syncTrayLetterChipSizes(): void {
     if (!this.trayEl) return
     const h = this.container.clientHeight
     const px = Math.max(16, Math.min(22, Math.round(h * 0.018)))
     for (const el of this.trayEl.querySelectorAll<HTMLElement>('.tray-letter')) {
-      el.style.width = `${px}px`
-      el.style.height = `${px}px`
-      el.style.fontSize = `${Math.max(8, Math.round(px * 0.42))}px`
+      el.style.width = 'auto'
+      el.style.minWidth = `${px}px`
+      el.style.height = `${Math.round(px * 1.05)}px`
+      el.style.fontSize = `${Math.max(9, Math.round(px * 0.48))}px`
+      el.style.padding = `2px ${Math.max(6, Math.round(px * 0.32))}px`
     }
   }
 
@@ -548,16 +655,11 @@ export class Game {
     this.cameraViewHeightWorld = this.viewportProfile.cameraViewHeightWorld
     this.renderer.setSize(w, h, false)
     const aspect = w / h
-    const halfY = this.cameraViewHeightWorld / 2
-    const halfX = halfY * aspect
-    this.camera.left = -halfX
-    this.camera.right = halfX
-    this.camera.top = halfY
-    this.camera.bottom = -halfY
+    this.camera.aspect = aspect
     this.camera.updateProjectionMatrix()
     this.applyViewportProfileRuntime()
     this.refreshHudScore()
-    this.syncTrayLetterCircleSizes()
+    this.syncTrayLetterChipSizes()
   }
 
   private isPortraitMode(): boolean {
@@ -571,27 +673,27 @@ export class Game {
     const portrait = this.isPortraitMode()
     if (!portrait) {
       return {
-        cameraViewHeightWorld: 1720,
+        cameraViewHeightWorld: 1460,
         playerSize: 28,
         letterRadius: 54,
         starterScale: 58,
         starterSpacing: 92,
         enemyStartCount: 8,
         enemyMaxCount: 18,
-        enemyBaseRadiusScale: 1,
+        enemyBaseRadiusScale: 1.12,
         enemyMinSpawnDist: Math.round(this.mapSize * 0.2),
         enemyMaxSpawnDist: Math.min(1580, this.mapSize / 2 - 100),
       }
     }
     return {
-      cameraViewHeightWorld: 1980,
+      cameraViewHeightWorld: 1680,
       playerSize: 34,
       letterRadius: 70,
       starterScale: 72,
       starterSpacing: 104,
       enemyStartCount: 6,
       enemyMaxCount: 15,
-      enemyBaseRadiusScale: 0.92,
+      enemyBaseRadiusScale: 1.06,
       enemyMinSpawnDist: Math.round(this.mapSize * 0.22),
       enemyMaxSpawnDist: Math.min(1520, this.mapSize / 2 - 100),
     }
@@ -613,8 +715,46 @@ export class Game {
     this.loop()
   }
 
+  /** Replaces the grid plane material with the animated procedural water shader. */
+  private setupOceanWaterShader(): void {
+    const oldMat = this.gridPlane.material as THREE.Material
+    oldMat.dispose()
+    if (this.oceanTexture) {
+      this.oceanTexture.dispose()
+      this.oceanTexture = null
+    }
+    const waterMat = createSimpleWaterShaderMaterial()
+    waterMat.toneMapped = true
+    this.gridPlane.material = waterMat
+    this.waterMaterial = waterMat
+  }
+
+  private async loadSkyAndOcean(): Promise<void> {
+    const loader = new THREE.TextureLoader()
+    // Must respect Vite `base` (e.g. /pacman-scrabble/) or /sky_38_2k.png 404s in dev and on GitHub Pages.
+    const skyUrl = `${import.meta.env.BASE_URL}sky_38_2k.png`
+    try {
+      const tex = await loader.loadAsync(skyUrl)
+      tex.colorSpace = THREE.SRGBColorSpace
+      tex.minFilter = THREE.LinearMipmapLinearFilter
+      tex.magFilter = THREE.LinearFilter
+      this.scene.background = tex
+      this.scene.environment = null
+
+      this.scene.fog = new THREE.FogExp2(0xa8c4e8, 0.000044)
+      this.setupOceanWaterShader()
+    } catch (err) {
+      console.warn('Sky / water failed (using fallback colors)', err)
+      this.scene.background = new THREE.Color(0x6a9ecf)
+      this.scene.fog = new THREE.FogExp2(0xa8c4e8, 0.000052)
+      this.setupOceanWaterShader()
+    }
+  }
+
   private async initGameAsync() {
     try {
+      await this.loadSkyAndOcean()
+
       this.hud = new Hud()
 
       // Cache DOM refs
@@ -626,12 +766,13 @@ export class Game {
       this.wordPartitioner = new WordPartitioner()
       this.hud.setPowerMode(false)
 
-      this.playerSnakeTrail = new SnakeTrail(this.viewportProfile.letterRadius * 0.82)
+      // Spacing ≥ uniform tail tile width (~0.92×radius) so cargo letters don’t overlap along the curve.
+      this.playerSnakeTrail = new SnakeTrail(this.viewportProfile.letterRadius * 1.04)
       this.setupPlayerBodyRings()
       this.setupSubmitZones()
       this.wordScrambler = new WordScrambler({
         scene: this.scene,
-        bounds: this.bounds,
+        bounds: this.playBounds(),
         letterRadius: this.viewportProfile.letterRadius,
         maxLetters: 88,
         starterScale: this.viewportProfile.starterScale,
@@ -692,18 +833,19 @@ export class Game {
   private setupPlayerBodyRings(): void {
     const geo = new THREE.CircleGeometry(1, 14)
     const mat = new THREE.MeshStandardMaterial({
-      color: 0x1a66cc,
-      emissive: new THREE.Color(0x1144aa),
-      emissiveIntensity: 0.35,
-      metalness: 0.08,
-      roughness: 0.45,
+      color: 0x6ec8ff,
+      emissive: new THREE.Color(0x4488cc),
+      emissiveIntensity: 0.28,
+      metalness: 0,
+      roughness: 0.5,
+      // No polygonOffset — negative offset was pulling rings toward the camera in the depth buffer
+      // so they drew on top of the letter tiles (wrong order: letter ⊃ ring ⊃ sea).
     })
     this.bodyRingMaterial = mat
     for (let i = 0; i < this.bodyRingPoolSize; i++) {
       const m = new THREE.Mesh(geo, mat)
       m.visible = false
-      m.position.z = 0.45
-      m.renderOrder = -2
+      m.renderOrder = 0
       this.scene.add(m)
       this.playerBodyRings.push(m)
     }
@@ -867,6 +1009,68 @@ export class Game {
     const z = this.submitZone
     const w = z.maxX - z.minX
     const h = z.maxY - z.minY
+    const cx = (z.minX + z.maxX) * 0.5
+    const cy = (z.minY + z.maxY) * 0.5
+
+    const margin = 32
+    const outerW = w + margin * 2
+    const outerH = h + margin * 2
+    const platformH = 18
+    const wallH = 48
+    const wallT = 14
+
+    const stone = new THREE.MeshStandardMaterial({
+      color: 0x5c6670,
+      roughness: 0.91,
+      metalness: 0.02,
+    })
+    const stoneDark = new THREE.MeshStandardMaterial({
+      color: 0x3e464e,
+      roughness: 0.93,
+      metalness: 0,
+    })
+
+    const fort = new THREE.Group()
+    fort.position.set(cx, cy, 0)
+
+    const plat = new THREE.Mesh(new THREE.BoxGeometry(outerW, outerH, platformH), stone)
+    plat.position.z = platformH / 2
+    plat.castShadow = false
+    plat.receiveShadow = false
+    fort.add(plat)
+
+    const wallZ = platformH + wallH / 2
+    const wN = new THREE.Mesh(new THREE.BoxGeometry(outerW + wallT * 2, wallT, wallH), stoneDark)
+    wN.position.set(0, outerH / 2 + wallT / 2, wallZ)
+    fort.add(wN)
+    const wS = new THREE.Mesh(new THREE.BoxGeometry(outerW + wallT * 2, wallT, wallH), stoneDark)
+    wS.position.set(0, -outerH / 2 - wallT / 2, wallZ)
+    fort.add(wS)
+    const wE = new THREE.Mesh(new THREE.BoxGeometry(wallT, outerH, wallH), stoneDark)
+    wE.position.set(outerW / 2 + wallT / 2, 0, wallZ)
+    fort.add(wE)
+    const wW = new THREE.Mesh(new THREE.BoxGeometry(wallT, outerH, wallH), stoneDark)
+    wW.position.set(-outerW / 2 - wallT / 2, 0, wallZ)
+    fort.add(wW)
+
+    const towerR = 10
+    const towerH = wallH + 16
+    const tz = platformH + towerH / 2
+    const ox = outerW / 2 + wallT * 0.55
+    const oy = outerH / 2 + wallT * 0.55
+    for (const [sx, sy] of [
+      [1, 1],
+      [-1, 1],
+      [1, -1],
+      [-1, -1],
+    ] as const) {
+      const tower = new THREE.Mesh(new THREE.CylinderGeometry(towerR * 0.9, towerR, towerH, 14), stone)
+      tower.position.set(sx * ox, sy * oy, tz)
+      fort.add(tower)
+    }
+
+    this.scene.add(fort)
+
     const geo = new THREE.PlaneGeometry(w, h)
     this.ensureSubmitGateCanvas()
     this.drawSubmitGateTexture(0, false)
@@ -878,12 +1082,14 @@ export class Game {
       side: THREE.DoubleSide,
       depthTest: true,
       depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
     })
     const mesh = new THREE.Mesh(geo, mat)
-    // Above the grid (z=0) so the panel stays visible; below rings (0.45), letters/player/blobs (~1).
-    mesh.position.set((z.minX + z.maxX) * 0.5, (z.minY + z.maxY) * 0.5, 0.08)
-    mesh.renderOrder = 0
-    this.scene.add(mesh)
+    mesh.position.set(0, 0, platformH + 1.4)
+    mesh.renderOrder = 4
+    fort.add(mesh)
     this.submitZoneMaterial = mat
   }
 
@@ -943,15 +1149,16 @@ export class Game {
     const maxSpawnDist = this.viewportProfile.enemyMaxSpawnDist
     const margin = baseRadius * 2
     const avoid = this.submitGateAvoidBounds()
+    const b = this.playBounds()
     for (let attempt = 0; attempt < 70; attempt++) {
       const angle = Math.random() * Math.PI * 2
       const dist = minSpawnDist + Math.random() * (maxSpawnDist - minSpawnDist)
       out.set(Math.cos(angle) * dist, Math.sin(angle) * dist)
       if (
-        out.x >= this.bounds.minX + margin &&
-        out.x <= this.bounds.maxX - margin &&
-        out.y >= this.bounds.minY + margin &&
-        out.y <= this.bounds.maxY - margin &&
+        out.x >= b.minX + margin &&
+        out.x <= b.maxX - margin &&
+        out.y >= b.minY + margin &&
+        out.y <= b.maxY - margin &&
         !Game.pointInRect(out.x, out.y, avoid)
       ) {
         return
@@ -959,23 +1166,24 @@ export class Game {
     }
     for (let attempt = 0; attempt < 40; attempt++) {
       out.set(
-        THREE.MathUtils.lerp(this.bounds.minX + margin, this.bounds.maxX - margin, Math.random()),
-        THREE.MathUtils.lerp(this.bounds.minY + margin, this.bounds.maxY - margin, Math.random()),
+        THREE.MathUtils.lerp(b.minX + margin, b.maxX - margin, Math.random()),
+        THREE.MathUtils.lerp(b.minY + margin, b.maxY - margin, Math.random()),
       )
       if (!Game.pointInRect(out.x, out.y, avoid)) {
         return
       }
     }
-    out.set(this.bounds.minX + margin + 80, this.bounds.maxY - margin - 80)
+    out.set(b.minX + margin + 80, b.maxY - margin - 80)
   }
 
   private spawnEnemyAtIndex(i: number): void {
-    const r = (28 + Math.random() * 14) * this.viewportProfile.enemyBaseRadiusScale
+    /** World scale for the mine mesh — large, readable; height follows radius in Enemy. */
+    const r = (38 + Math.random() * 22) * 1.22 * this.viewportProfile.enemyBaseRadiusScale
     const tmp = new THREE.Vector2()
     this.placeEnemySpawnPosition(tmp, r)
     const enemy = this.enemyPool[i]
     enemy.setActive(true, tmp, r)
-    enemy.setPatrolBounds(this.bounds, this.submitGateAvoidBounds())
+    enemy.setPatrolBounds(this.playBounds(), this.submitGateAvoidBounds())
   }
 
   private spawnInitialEnemies() {
@@ -1027,10 +1235,17 @@ export class Game {
 
     this.updateCamera(deltaSeconds)
     this.recomputePointerWorld()
-    this.ambientBlobs.update(deltaSeconds, this.bounds)
+    this.ambientBlobs.update(deltaSeconds, this.playBounds())
+    if (this.waterMaterial) {
+      this.waterMaterial.uniforms.uTime.value = nowMs * 0.001
+      this.waterMaterial.uniforms.uCameraPosition.value.copy(this.camera.position)
+    } else if (this.oceanTexture) {
+      this.oceanTexture.offset.x += deltaSeconds * 0.014
+      this.oceanTexture.offset.y += deltaSeconds * 0.009
+    }
     this.player.update(deltaSeconds, {
       pointerWorld: this.pointerWorld,
-      bounds: this.bounds,
+      bounds: this.playBounds(),
       speedMultiplier: 1,
     })
     if (this.equippedSkinId === 'safezone') {
@@ -1080,19 +1295,31 @@ export class Game {
     const halfY = (this.cameraViewHeightWorld * tailZoom) / 2
     const halfX = halfY * aspect
 
-    const targetX = THREE.MathUtils.clamp(this.player.mesh.position.x, this.bounds.minX + halfX, this.bounds.maxX - halfX)
-    const targetY = THREE.MathUtils.clamp(this.player.mesh.position.y, this.bounds.minY + halfY, this.bounds.maxY - halfY)
+    const pb = this.playBounds()
+    const targetX = THREE.MathUtils.clamp(this.player.mesh.position.x, pb.minX + halfX, pb.maxX - halfX)
+    const targetY = THREE.MathUtils.clamp(this.player.mesh.position.y, pb.minY + halfY, pb.maxY - halfY)
 
     const t = 1 - Math.exp(-this.cameraFollowSpeed * deltaSeconds)
-    this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetX, t)
-    this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetY, t)
-    this.camera.lookAt(this.camera.position.x, this.camera.position.y, 0)
+    this.cameraLookX = THREE.MathUtils.lerp(this.cameraLookX, targetX, t)
+    this.cameraLookY = THREE.MathUtils.lerp(this.cameraLookY, targetY, t)
+
+    const back = this.cameraBackY * tailZoom
+    const up = this.cameraUpZ * tailZoom
+    this.camera.position.set(this.cameraLookX, this.cameraLookY - back, up)
+    this.camera.lookAt(this.cameraLookX, this.cameraLookY, 0)
   }
 
   private recomputePointerWorld() {
     this.raycaster.setFromCamera(this.pointerNdc, this.camera)
     const hit = this.raycaster.ray.intersectPlane(this.plane, this.pointerHit)
-    if (hit) this.pointerWorld.set(hit.x, hit.y)
+    if (hit) {
+      const r = this.player.getRadius()
+      const pb = this.playBounds()
+      this.pointerWorld.set(
+        THREE.MathUtils.clamp(hit.x, pb.minX + r, pb.maxX - r),
+        THREE.MathUtils.clamp(hit.y, pb.minY + r, pb.maxY - r),
+      )
+    }
   }
 
   // Project a world position to CSS screen coords
@@ -1116,7 +1343,7 @@ export class Game {
     )
     this.trayEl.style.left = `${x}px`
     this.trayEl.style.top = `${y}px`
-    this.syncTrayLetterCircleSizes()
+    this.syncTrayLetterChipSizes()
   }
 
   private updateTrayContent() {
@@ -1128,7 +1355,7 @@ export class Game {
       span.textContent = ch.toUpperCase()
       this.trayEl.appendChild(span)
     }
-    this.syncTrayLetterCircleSizes()
+    this.syncTrayLetterChipSizes()
   }
 
   // ── Power Mode ────────────────────────────────────────────────────────────
@@ -1153,8 +1380,8 @@ export class Game {
     const playerRadius = this.player.getRadius()
     let changed = false
     for (const letter of this.wordScrambler.getPickupLetters()) {
-      const dx = playerPos.x - letter.sprite.position.x
-      const dy = playerPos.y - letter.sprite.position.y
+      const dx = playerPos.x - letter.root.position.x
+      const dy = playerPos.y - letter.root.position.y
       const r = playerRadius + letter.radius * 0.82
         if (dx * dx + dy * dy <= r * r * 0.85) {
         this.tray.push(letter.char)
@@ -1216,11 +1443,24 @@ export class Game {
     this.playerSnakeTrail.pushHead(head)
     for (let i = 0; i < this.playerBodyLetters.length; i++) {
       const p = this.playerSnakeTrail.getSegmentPosition(i, head)
-      this.playerBodyLetters[i].sprite.position.set(p.x, p.y, 1)
+      const root = this.playerBodyLetters[i].root
+      this.playerBodyLetters[i].root.position.set(
+        p.x,
+        p.y,
+        letterAnchorZFromRootScale(root.scale) + BODY_LETTER_Z_LIFT,
+      )
       if (i < this.playerBodyRings.length) {
         const ring = this.playerBodyRings[i]
         ring.visible = true
-        ring.position.set(p.x, p.y, 0.45)
+        const cz = letterAnchorZFromRootScale(root.scale) + BODY_LETTER_Z_LIFT
+        const halfTileZ = (LETTER_TILE_DEPTH * root.scale.z) / 2
+        const tileBottomZ = cz - halfTileZ
+        /** Halo strictly under the tile: ocean < ring < letter. Use actual grid Z + margin to avoid z-fighting. */
+        const groundZ = this.gridPlane.position.z
+        const minZAboveGround = groundZ + 0.28
+        const gapBelowTile = 0.22
+        const ringZ = Math.max(minZAboveGround, tileBottomZ - gapBelowTile)
+        ring.position.set(p.x, p.y, ringZ)
         const r = this.playerBodyLetters[i].radius * 0.58
         ring.scale.setScalar(r)
       }
@@ -1246,7 +1486,7 @@ export class Game {
       const ep = enemy.mesh.position
       const er = enemy.getRadius() * 0.9
       for (let j = 0; j < this.playerBodyLetters.length; j++) {
-        const seg = this.playerBodyLetters[j].sprite.position
+        const seg = this.playerBodyLetters[j].root.position
         const dx = ep.x - seg.x
         const dy = ep.y - seg.y
         const rr = er + this.playerBodyLetters[j].radius * 0.72
@@ -1347,7 +1587,7 @@ export class Game {
 
       const fleeMode = this.powerModeActive
       const speedScale = this.enemySpeedScales[i] * this.enemyGlobalRamp
-      enemy.update(deltaSeconds, tmpPP, this.bounds, speedScale, nowMs, fleeMode, playerInSafeZone)
+      enemy.update(deltaSeconds, tmpPP, this.playBounds(), speedScale, nowMs, fleeMode, playerInSafeZone)
 
       if (playerInSafeZone) continue
 
@@ -1415,7 +1655,12 @@ export class Game {
     for (const r of this.playerBodyRings) r.visible = false
     this.updateTrayContent()
     this.player.setSize(this.initialPlayerSize)
-    this.player.mesh.position.set(0, 0, 1)
+    this.player.mesh.position.x = 0
+    this.player.mesh.position.y = 0
+    this.cameraLookX = 0
+    this.cameraLookY = 0
+    this.camera.position.set(0, -this.cameraBackY, this.cameraUpZ)
+    this.camera.lookAt(0, 0, 0)
 
     const tmp = new THREE.Vector2(0, 0)
     for (const e of this.enemyPool) e.setActive(false, tmp, 10)
@@ -1467,7 +1712,7 @@ export class Game {
 
   private triggerWordShockwave(nowMs: number): void {
     if (!this.shockwaveMesh) return
-    this.shockwaveMesh.position.set(this.player.mesh.position.x, this.player.mesh.position.y, 2)
+    this.shockwaveMesh.position.set(this.player.mesh.position.x, this.player.mesh.position.y, 2.12)
     this.shockwaveMesh.scale.setScalar(1)
     this.shockwaveMesh.visible = true
     this.shockwaveActive = true
@@ -1496,9 +1741,10 @@ export class Game {
   private maybeSpawnFruit(nowMs: number) {
     if (this.fruit.isActive() || nowMs < this.fruitNextSpawnMs) return
     const r = 22
+    const b = this.playBounds()
     const pos = new THREE.Vector2(
-      THREE.MathUtils.lerp(this.bounds.minX + r, this.bounds.maxX - r, Math.random()),
-      THREE.MathUtils.lerp(this.bounds.minY + r, this.bounds.maxY - r, Math.random()),
+      THREE.MathUtils.lerp(b.minX + r, b.maxX - r, Math.random()),
+      THREE.MathUtils.lerp(b.minY + r, b.maxY - r, Math.random()),
     )
     this.fruit.setActive(true, pos, r)
     this.fruitNextSpawnMs = nowMs + 14000 + Math.random() * 9000
@@ -1545,10 +1791,11 @@ export class Game {
     const maxTries = 28
     const fp = this.fruit.mesh.position
     const fruitActive = this.fruit.isActive()
+    const pb = this.playBounds()
     for (let t = 0; t < maxTries; t++) {
       const pos = new THREE.Vector2(
-        THREE.MathUtils.lerp(this.bounds.minX + r, this.bounds.maxX - r, Math.random()),
-        THREE.MathUtils.lerp(this.bounds.minY + r, this.bounds.maxY - r, Math.random()),
+        THREE.MathUtils.lerp(pb.minX + r, pb.maxX - r, Math.random()),
+        THREE.MathUtils.lerp(pb.minY + r, pb.maxY - r, Math.random()),
       )
       if (Game.pointInRect(pos.x, pos.y, this.submitZone)) continue
       if (fruitActive) {

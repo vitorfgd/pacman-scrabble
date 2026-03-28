@@ -1,29 +1,5 @@
 import * as THREE from 'three'
 
-function createStarGeometry(outerR = 1, innerR = 0.42, points = 5): THREE.BufferGeometry {
-  const positions: number[] = []
-  const total = points * 2
-
-  for (let i = 0; i < total; i++) {
-    // Start from top (-PI/2) so star sits upright.
-    const angle = (i / total) * Math.PI * 2 - Math.PI / 2
-    const r = i % 2 === 0 ? outerR : innerR
-    const nextI = (i + 1) % total
-    const nextAngle = (nextI / total) * Math.PI * 2 - Math.PI / 2
-    const nextR = nextI % 2 === 0 ? outerR : innerR
-
-    // Fan triangle: center → current vertex → next vertex.
-    positions.push(0, 0, 0)
-    positions.push(Math.cos(angle) * r, Math.sin(angle) * r, 0)
-    positions.push(Math.cos(nextAngle) * nextR, Math.sin(nextAngle) * nextR, 0)
-  }
-
-  const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  geo.computeVertexNormals()
-  return geo
-}
-
 export class Fruit {
   readonly mesh: THREE.Mesh
 
@@ -32,13 +8,13 @@ export class Fruit {
   private _startMs = 0
 
   constructor() {
-    const geometry = createStarGeometry(1, 0.42, 5)
+    const geometry = new THREE.IcosahedronGeometry(1, 0)
     const material = new THREE.MeshStandardMaterial({
       color: 0xffe040,
       emissive: new THREE.Color(0xffc200),
       emissiveIntensity: 0.7,
       roughness: 0.25,
-      metalness: 0.3,
+      metalness: 0,
     })
     this.mesh = new THREE.Mesh(geometry, material)
     this.mesh.position.set(0, 0, 0)
@@ -55,17 +31,20 @@ export class Fruit {
     if (!active) return
     this.radius = radius
     this.mesh.scale.setScalar(this.radius)
-    this.mesh.position.set(position.x, position.y, 1)
+    this.mesh.position.set(position.x, position.y, this.radius * 0.88 + 0.06)
     this._startMs = performance.now()
   }
 
   update(nowMs: number): void {
     if (!this.active) return
-    // Slow spin to attract attention.
-    this.mesh.rotation.z = ((nowMs - this._startMs) / 1200) * Math.PI * 2
+    const t = (nowMs - this._startMs) / 1000
+    // Slow tumble + spin so the pickup reads as a 3D object.
+    this.mesh.rotation.y = t * 1.9
+    this.mesh.rotation.z = t * 2.4
     // Gentle pulse.
     const pulse = 0.9 + 0.1 * Math.sin((nowMs - this._startMs) / 340)
     this.mesh.scale.setScalar(this.radius * pulse)
+    this.mesh.position.z = this.radius * pulse * 0.88 + 0.06
     const mat = this.mesh.material as THREE.MeshStandardMaterial
     mat.emissiveIntensity = 0.6 + 0.4 * Math.abs(Math.sin((nowMs - this._startMs) / 420))
   }

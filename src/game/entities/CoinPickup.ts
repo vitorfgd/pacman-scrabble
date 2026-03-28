@@ -8,12 +8,13 @@ export class CoinPickup {
   private _startMs = 0
 
   constructor() {
-    const geometry = new THREE.CircleGeometry(1, 28)
+    const geometry = new THREE.CylinderGeometry(1, 1, 0.26, 32)
+    geometry.rotateX(Math.PI / 2)
     const material = new THREE.MeshStandardMaterial({
       color: 0xffcc33,
       emissive: new THREE.Color(0xffaa00),
       emissiveIntensity: 0.65,
-      metalness: 0.45,
+      metalness: 0,
       roughness: 0.28,
     })
     this.mesh = new THREE.Mesh(geometry, material)
@@ -35,7 +36,7 @@ export class CoinPickup {
     if (!active) return
     this.radius = radius
     this.mesh.scale.setScalar(this.radius)
-    this.mesh.position.set(position.x, position.y, 0.95)
+    this.mesh.position.set(position.x, position.y, 0.24)
     this._startMs = performance.now()
   }
 

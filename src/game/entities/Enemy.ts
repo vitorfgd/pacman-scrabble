@@ -2,37 +2,98 @@ import * as THREE from 'three'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
 
-/**
- * Flat hexagon — reads as a hostile “chaser” / drone, not a star-shaped pickup.
- */
-function createHunterHexGeometry(): THREE.ShapeGeometry {
-  const shape = new THREE.Shape()
-  const sides = 6
-  const r = 1
-  for (let i = 0; i < sides; i++) {
-    const a = (i / sides) * Math.PI * 2 - Math.PI / 2
-    const x = Math.cos(a) * r
-    const y = Math.sin(a) * r
-    if (i === 0) shape.moveTo(x, y)
-    else shape.lineTo(x, y)
+/** Icosahedron vertices — evenly distributed directions for mine spikes. */
+const SPIKE_DIRS: THREE.Vector3[] = (() => {
+  const t = (1 + Math.sqrt(5)) / 2
+  const raw = [
+    [-1, t, 0],
+    [1, t, 0],
+    [-1, -t, 0],
+    [1, -t, 0],
+    [0, -1, t],
+    [0, 1, t],
+    [0, -1, -t],
+    [0, 1, -t],
+    [t, 0, -1],
+    [t, 0, 1],
+    [-t, 0, -1],
+    [-t, 0, 1],
+  ] as const
+  return raw.map(([x, y, z]) => new THREE.Vector3(x, y, z).normalize())
+})()
+
+function createMineGeometry(): {
+  group: THREE.Group
+  coreMat: THREE.MeshStandardMaterial
+  spikeMat: THREE.MeshStandardMaterial
+  glowMat: THREE.MeshBasicMaterial
+} {
+  const coreMat = new THREE.MeshStandardMaterial({
+    color: 0x1e0505,
+    emissive: new THREE.Color(0x6a0c08),
+    emissiveIntensity: 4.2,
+    metalness: 0,
+    roughness: 0.32,
+    toneMapped: false,
+  })
+  const spikeMat = new THREE.MeshStandardMaterial({
+    color: 0x140303,
+    emissive: new THREE.Color(0x4a0806),
+    emissiveIntensity: 2.2,
+    metalness: 0,
+    roughness: 0.3,
+    toneMapped: false,
+  })
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x3a0a08,
+    transparent: true,
+    opacity: 0.55,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  })
+
+  const group = new THREE.Group()
+  const sphereR = 0.46
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(sphereR, 22, 18), coreMat)
+  sphere.renderOrder = 14
+  group.add(sphere)
+
+  const glowSphere = new THREE.Mesh(new THREE.SphereGeometry(sphereR * 1.22, 16, 14), glowMat)
+  glowSphere.renderOrder = 13
+  group.add(glowSphere)
+
+  const coneH = 0.38
+  const coneR = 0.11
+  const spikeGeo = new THREE.ConeGeometry(coneR, coneH, 8)
+  const yAxis = new THREE.Vector3(0, 1, 0)
+  for (const dir of SPIKE_DIRS) {
+    const spike = new THREE.Mesh(spikeGeo, spikeMat)
+    spike.quaternion.setFromUnitVectors(yAxis, dir)
+    const dist = sphereR + coneH * 0.48
+    spike.position.copy(dir.clone().multiplyScalar(dist))
+    spike.renderOrder = 15
+    group.add(spike)
   }
-  shape.closePath()
-  return new THREE.ShapeGeometry(shape)
+
+  return { group: group, coreMat, spikeMat, glowMat }
 }
+
+/** Local sphere radius in `createMineGeometry` — used to place the mine on the water surface. */
+const MINE_SPHERE_LOCAL_R = 0.46
+/** World Z where the bottom of the sphere should sit (slightly above the ocean plane ~0). */
+const MINE_FLOAT_ABOVE_WATER = 0.05
 
 /**
  * Patrols between waypoints; when the player is within aggro range, locks onto a straight
  * dash toward them (bullet-like, no steering) for a few seconds, then returns to patrol.
  */
 export class Enemy {
-  private static readonly sharedGeometry: THREE.ShapeGeometry = createHunterHexGeometry()
-
   /** Root group (position / scale / spin). Game uses this like a mesh. */
   readonly mesh: THREE.Group
 
-  private readonly coreMesh: THREE.Mesh
-  private readonly glowMesh: THREE.Mesh
   private readonly coreMat: THREE.MeshStandardMaterial
+  private readonly spikeMat: THREE.MeshStandardMaterial
   private readonly glowMat: THREE.MeshBasicMaterial
 
   private active = false
@@ -41,9 +102,11 @@ export class Enemy {
   private pulseTimer = 0
 
   private readonly powerShrink = 0.65
+  private powerModeVisual = false
   private originalColor = new THREE.Color()
   private originalEmissive = new THREE.Color()
   private originalGlowColor = new THREE.Color()
+  private originalSpikeEmissive = new THREE.Color()
   private baseEmissiveIntensity = 3.35
 
   /** Squared distance to player to trigger a straight-line dash. */
@@ -62,36 +125,21 @@ export class Enemy {
   private gateAvoidRect: Bounds | null = null
 
   constructor() {
-    this.coreMat = new THREE.MeshStandardMaterial({
-      color: 0x120308,
-      emissive: new THREE.Color(0xff2200),
-      emissiveIntensity: 3.35,
-      metalness: 0.42,
-      roughness: 0.22,
-    })
-    this.glowMat = new THREE.MeshBasicMaterial({
-      color: 0xff3a18,
-      transparent: true,
-      opacity: 0.78,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      toneMapped: false,
-    })
-
-    this.coreMesh = new THREE.Mesh(Enemy.sharedGeometry, this.coreMat)
-    this.coreMesh.position.z = 0.06
-    this.coreMesh.renderOrder = 14
-
-    this.glowMesh = new THREE.Mesh(Enemy.sharedGeometry, this.glowMat)
-    this.glowMesh.scale.setScalar(1.3)
-    this.glowMesh.position.z = 0
-    this.glowMesh.renderOrder = 13
-
-    this.mesh = new THREE.Group()
-    this.mesh.add(this.glowMesh)
-    this.mesh.add(this.coreMesh)
-    this.mesh.position.set(0, 0, 1)
+    const mine = createMineGeometry()
+    this.coreMat = mine.coreMat
+    this.spikeMat = mine.spikeMat
+    this.glowMat = mine.glowMat
+    this.mesh = mine.group
+    this.mesh.position.set(0, 0, MINE_FLOAT_ABOVE_WATER + MINE_SPHERE_LOCAL_R * 10)
     this.mesh.visible = false
+  }
+
+  /** Center Z so the scaled sphere rests on the water + optional bob (reads “floating”). */
+  private waterFloatCenterZ(scale: number): number {
+    const bob =
+      Math.sin(this.pulseTimer * 2.05) * 0.32 +
+      Math.sin(this.pulseTimer * 2.9 + 0.8) * 0.14
+    return MINE_FLOAT_ABOVE_WATER + MINE_SPHERE_LOCAL_R * scale + bob
   }
 
   isActive(): boolean {
@@ -110,12 +158,15 @@ export class Enemy {
   setActive(active: boolean, position: THREE.Vector2, baseRadius: number): void {
     this.active = active
     this.mesh.visible = active
-    if (!active) return
+    if (!active) {
+      this.powerModeVisual = false
+      return
+    }
 
-    const r = Math.max(4, baseRadius * 1.08)
+    const r = Math.max(24, baseRadius * 1.2)
     this.originalRadius = r
     this.mesh.scale.setScalar(r)
-    this.mesh.position.set(position.x, position.y, 1)
+    this.mesh.position.set(position.x, position.y, this.waterFloatCenterZ(r))
 
     this.slowUntilMs = 0
     this.pulseTimer = Math.random() * Math.PI * 2
@@ -123,17 +174,20 @@ export class Enemy {
     this.dashActive = false
     this.dashEndMs = 0
 
-    const hue = Math.random()
-    this.originalColor.setHSL(hue, 0.97, 0.22)
+    this.originalColor.setHex(0x1e0505)
     this.coreMat.color.copy(this.originalColor)
-    this.originalEmissive.setHSL((hue + 0.02) % 1, 1, 0.52)
+    this.originalEmissive.setHex(0x6a0c08)
     this.coreMat.emissive.copy(this.originalEmissive)
-    this.baseEmissiveIntensity = 3.1 + Math.random() * 0.55
+    this.baseEmissiveIntensity = 4.0 + Math.random() * 0.9
     this.coreMat.emissiveIntensity = this.baseEmissiveIntensity
 
-    this.originalGlowColor.setHSL((hue + 0.01) % 1, 1, 0.64)
+    this.originalGlowColor.setHex(0x4a100c)
     this.glowMat.color.copy(this.originalGlowColor)
-    this.glowMat.opacity = 0.72
+    this.glowMat.opacity = 0.55
+
+    this.originalSpikeEmissive.setHex(0x4a0806)
+    this.spikeMat.emissive.copy(this.originalSpikeEmissive)
+    this.spikeMat.emissiveIntensity = 2.2
   }
 
   /** Call after setActive when spawning; also sets first waypoint outside the gate zone. */
@@ -315,13 +369,20 @@ export class Enemy {
     this.pulseTimer += deltaSeconds * (!fleeMode ? 5.2 : 2.8)
     this.mesh.rotation.z += deltaSeconds * (fleeMode ? 0.62 : 0.34)
 
-    if (!fleeMode) {
+    if (!fleeMode && !this.powerModeVisual) {
       const wobble = 0.55 + 0.45 * Math.abs(Math.sin(this.pulseTimer))
-      this.coreMat.emissiveIntensity = this.baseEmissiveIntensity * (0.88 + 0.42 * wobble)
-      this.glowMat.opacity = 0.55 + 0.38 * wobble
+      this.coreMat.emissiveIntensity = this.baseEmissiveIntensity * (0.72 + 0.48 * wobble)
+      this.spikeMat.emissiveIntensity = 1.85 + 1.1 * wobble
+      this.glowMat.opacity = 0.42 + 0.4 * wobble
+    } else if (!fleeMode && this.powerModeVisual) {
+      const wobble = 0.55 + 0.45 * Math.abs(Math.sin(this.pulseTimer))
+      this.coreMat.emissiveIntensity = 5.8 + 0.55 * wobble
+      this.spikeMat.emissiveIntensity = 3.4 + 0.5 * wobble
+      this.glowMat.opacity = 0.85 + 0.07 * wobble
     } else {
-      this.coreMat.emissiveIntensity = 3.85
-      this.glowMat.opacity = 0.78
+      this.coreMat.emissiveIntensity = 5.2
+      this.spikeMat.emissiveIntensity = 3.4
+      this.glowMat.opacity = 0.88
     }
 
     const fleeBoost = fleeMode ? 1.35 : 1.0
@@ -336,7 +397,7 @@ export class Enemy {
     const r = this.getRadius()
     pos.x = THREE.MathUtils.clamp(pos.x, bounds.minX + r, bounds.maxX - r)
     pos.y = THREE.MathUtils.clamp(pos.y, bounds.minY + r, bounds.maxY - r)
-    pos.z = 1
+    pos.z = this.waterFloatCenterZ(r)
 
     const avoid = this.gateAvoidRect
     if (!this.dashActive && avoid && Enemy.pointInRect(pos.x, pos.y, avoid)) {
@@ -349,19 +410,24 @@ export class Enemy {
 
   setPowerMode(active: boolean): void {
     if (!this.active) return
+    this.powerModeVisual = active
     if (active) {
-      this.coreMat.color.setHex(0x0a1838)
-      this.coreMat.emissive.setHex(0x3388ff)
-      this.coreMat.emissiveIntensity = 4.1
-      this.glowMat.color.setHex(0x66ccff)
-      this.glowMat.opacity = 0.88
+      this.coreMat.color.setHex(0x120202)
+      this.coreMat.emissive.setHex(0x6a2018)
+      this.coreMat.emissiveIntensity = 6.2
+      this.spikeMat.emissive.setHex(0x551810)
+      this.spikeMat.emissiveIntensity = 3.8
+      this.glowMat.color.setHex(0x5a2820)
+      this.glowMat.opacity = 0.92
       this.mesh.scale.setScalar(this.originalRadius * this.powerShrink)
     } else {
       this.coreMat.color.copy(this.originalColor)
       this.coreMat.emissive.copy(this.originalEmissive)
       this.coreMat.emissiveIntensity = this.baseEmissiveIntensity
+      this.spikeMat.emissive.copy(this.originalSpikeEmissive)
+      this.spikeMat.emissiveIntensity = 2.2
       this.glowMat.color.copy(this.originalGlowColor)
-      this.glowMat.opacity = 0.72
+      this.glowMat.opacity = 0.55
       this.mesh.scale.setScalar(this.originalRadius)
     }
   }

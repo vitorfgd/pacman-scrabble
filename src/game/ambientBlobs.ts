@@ -4,68 +4,122 @@ export type BlobBounds = { minX: number; maxX: number; minY: number; maxY: numbe
 
 export type BlobAvoidRect = { minX: number; maxX: number; minY: number; maxY: number }
 
-/** Many shallow spikes (inner near outer) — reads as textured hazard, not octagon enemies. */
-function createSpikyBlobGeometry(spikeCount: number, outer = 1, inner = 0.9): THREE.ShapeGeometry {
-  const shape = new THREE.Shape()
-  const n = spikeCount * 2
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 - Math.PI / 2
-    const rad = i % 2 === 0 ? outer : inner
-    const x = Math.cos(a) * rad
-    const y = Math.sin(a) * rad
-    if (i === 0) shape.moveTo(x, y)
-    else shape.lineTo(x, y)
+/**
+ * Toxic bubbles: a low squashed “foam” plus a few small spheres — reads as chemical
+ * blistering on the water, not a flat decal.
+ */
+function createToxicBubbleGroup(
+  hue: number,
+  seed: number,
+): { group: THREE.Group; surfaceMat: THREE.MeshStandardMaterial; rimMat: THREE.MeshBasicMaterial } {
+  const baseHue = (0.2 + (hue + seed * 0.07) * 0.2) % 1
+  const body = new THREE.Color().setHSL(baseHue, 0.95, 0.32)
+  const glow = new THREE.Color().setHSL((baseHue + 0.05) % 1, 1, 0.5)
+
+  const surfaceMat = new THREE.MeshStandardMaterial({
+    color: body,
+    emissive: glow,
+    emissiveIntensity: 1.75 + seed * 0.55,
+    metalness: 0.04,
+    roughness: 0.18,
+    transparent: true,
+    opacity: 0.9 + seed * 0.06,
+    depthWrite: true,
+    side: THREE.FrontSide,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+    toneMapped: false,
+  })
+
+  const rimMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color().setHSL((baseHue + 0.08) % 1, 1, 0.55),
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  })
+
+  const blipMat = new THREE.MeshBasicMaterial({
+    color: new THREE.Color().setHSL((baseHue + 0.12) % 1, 0.9, 0.58),
+    transparent: true,
+    opacity: 0.42,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: false,
+  })
+
+  const flat = 0.34 + seed * 0.14
+  const bulgeX = 1.08 + seed * 0.1
+  const bulgeY = 0.96 + (1 - seed) * 0.1
+
+  const main = new THREE.Mesh(new THREE.SphereGeometry(1, 44, 36), surfaceMat)
+  main.scale.set(bulgeX, bulgeY, flat)
+  main.position.z = flat
+  main.renderOrder = 12
+
+  const topZ = flat * 2
+  const meniscus = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 56), rimMat)
+  meniscus.position.z = topZ - 0.025
+  meniscus.renderOrder = 13
+
+  const shape = new THREE.Group()
+  shape.add(main)
+  shape.add(meniscus)
+
+  /** Extra micro-bubbles on the surface. */
+  const n = 2 + Math.floor(seed * 3)
+  for (let b = 0; b < n; b++) {
+    const br = 0.14 + seed * 0.06 + b * 0.03
+    const bub = new THREE.Mesh(new THREE.SphereGeometry(br, 20, 16), blipMat)
+    const ang = (b / n) * Math.PI * 2 + seed * 3.1
+    const dist = 0.52 + seed * 0.12
+    bub.position.set(Math.cos(ang) * dist * 0.85, Math.sin(ang) * dist * 0.78, topZ - 0.04 + b * 0.012)
+    bub.renderOrder = 14
+    shape.add(bub)
   }
-  shape.closePath()
-  return new THREE.ShapeGeometry(shape)
+
+  const group = new THREE.Group()
+  group.add(shape)
+
+  return { group, surfaceMat, rimMat }
 }
 
-/** Drifting hazards: collide with player (handled in Game). Kept out of the submit zone. */
+/** Drifting poison pools: collide with player (handled in Game). Kept out of the submit zone. */
 export class AmbientBlobs {
   private static readonly SPEED_MAX = 28
   private static readonly SPEED_MIN = 6
 
   readonly group = new THREE.Group()
-  private readonly sharedGeo: THREE.ShapeGeometry
-  private readonly meshes: THREE.Mesh[] = []
+  private readonly blobGroups: THREE.Group[] = []
+  private readonly surfaceMats: THREE.MeshStandardMaterial[] = []
   private readonly vx: number[] = []
   private readonly vy: number[] = []
   private readonly radii: number[] = []
+  private readonly phase: number[] = []
   private readonly avoidRect: BlobAvoidRect
 
   constructor(count: number, arena: BlobBounds, avoidRect: BlobAvoidRect) {
     this.group.position.z = 0
     this.avoidRect = avoidRect
-    this.sharedGeo = createSpikyBlobGeometry(26, 1, 0.9)
     for (let i = 0; i < count; i++) {
-      const hue = (i * 0.618033988749895 + Math.random() * 0.08) % 1
-      const c = new THREE.Color().setHSL(hue, 0.62 + Math.random() * 0.28, 0.48 + Math.random() * 0.12)
-      const em = c.clone().multiplyScalar(1.05)
-      const mat = new THREE.MeshStandardMaterial({
-        color: c,
-        emissive: em,
-        emissiveIntensity: 1.65 + Math.random() * 0.55,
-        metalness: 0.18,
-        roughness: 0.32,
-        transparent: true,
-        opacity: 0.62 + Math.random() * 0.18,
-        depthTest: false,
-        depthWrite: false,
-      })
-      const m = new THREE.Mesh(this.sharedGeo, mat)
-      /** Draw after letter sprites (renderOrder 1) so blobs occlude pickups. */
-      m.renderOrder = 12
+      const hue = (i * 0.618033988749895 + Math.random() * 0.06) % 1
+      const seed = Math.random()
+      const { group, surfaceMat } = createToxicBubbleGroup(hue, seed)
+      this.surfaceMats.push(surfaceMat)
+      this.phase.push(Math.random() * Math.PI * 2)
       const r = 55 + Math.random() * 140
-      m.scale.setScalar(r)
+      group.scale.setScalar(r)
       this.radii.push(r)
       const pos = this.randomSpawnPosition(arena, r, avoidRect, 48)
-      m.position.set(pos.x, pos.y, 1.08)
+      group.position.set(pos.x, pos.y, 0.12)
       const speed = 9 + Math.random() * 16
       const ang = Math.random() * Math.PI * 2
       this.vx.push(Math.cos(ang) * speed)
       this.vy.push(Math.sin(ang) * speed)
-      this.meshes.push(m)
-      this.group.add(m)
+      this.blobGroups.push(group)
+      this.group.add(group)
     }
   }
 
@@ -146,35 +200,36 @@ export class AmbientBlobs {
 
   update(deltaSeconds: number, arena: BlobBounds): void {
     const avoid = this.avoidRect
-    for (let i = 0; i < this.meshes.length; i++) {
-      const m = this.meshes[i]
+    const t = performance.now() * 0.001
+    for (let i = 0; i < this.blobGroups.length; i++) {
+      const g = this.blobGroups[i]
       const r = this.radii[i]
-      m.position.x += this.vx[i] * deltaSeconds
-      m.position.y += this.vy[i] * deltaSeconds
+      g.position.x += this.vx[i] * deltaSeconds
+      g.position.y += this.vy[i] * deltaSeconds
 
       const minX = arena.minX + r
       const maxX = arena.maxX - r
       const minY = arena.minY + r
       const maxY = arena.maxY - r
 
-      if (m.position.x < minX) {
-        m.position.x = minX
+      if (g.position.x < minX) {
+        g.position.x = minX
         this.vx[i] *= -1
-      } else if (m.position.x > maxX) {
-        m.position.x = maxX
+      } else if (g.position.x > maxX) {
+        g.position.x = maxX
         this.vx[i] *= -1
       }
-      if (m.position.y < minY) {
-        m.position.y = minY
+      if (g.position.y < minY) {
+        g.position.y = minY
         this.vy[i] *= -1
-      } else if (m.position.y > maxY) {
-        m.position.y = maxY
+      } else if (g.position.y > maxY) {
+        g.position.y = maxY
         this.vy[i] *= -1
       }
 
-      if (AmbientBlobs.circleOverlapsRect(m.position.x, m.position.y, r, avoid)) {
-        const cx = m.position.x
-        const cy = m.position.y
+      if (AmbientBlobs.circleOverlapsRect(g.position.x, g.position.y, r, avoid)) {
+        const cx = g.position.x
+        const cy = g.position.y
         const resolved = AmbientBlobs.resolveCircleOutOfRect(cx, cy, r, avoid)
         const nx = resolved.x - cx
         const ny = resolved.y - cy
@@ -188,29 +243,44 @@ export class AmbientBlobs {
             this.vy[i] -= 2 * dot * nny
           }
         }
-        m.position.x = resolved.x
-        m.position.y = resolved.y
+        g.position.x = resolved.x
+        g.position.y = resolved.y
       }
 
       this.clampBlobSpeed(i)
 
-      m.rotation.z += deltaSeconds * (0.08 + (i % 5) * 0.02)
+      const ph = this.phase[i]
+      const breathe = 1 + 0.024 * Math.sin(t * 1.4 + ph)
+      g.scale.setScalar(r * breathe)
+      g.rotation.z += deltaSeconds * (0.032 + (i % 5) * 0.01)
+
+      const mat = this.surfaceMats[i]
+      const glug = 0.72 + 0.28 * Math.abs(Math.sin(t * 2.1 + ph))
+      mat.emissiveIntensity = (1.55 + (i % 3) * 0.28) * glug
+      mat.opacity = THREE.MathUtils.clamp(0.85 + 0.1 * glug, 0.75, 0.97)
     }
   }
 
   /** For player collision: world XY + radius per blob. */
   forEachBlob(cb: (x: number, y: number, radius: number) => void): void {
-    for (let i = 0; i < this.meshes.length; i++) {
-      const m = this.meshes[i]
-      cb(m.position.x, m.position.y, this.radii[i])
+    for (let i = 0; i < this.blobGroups.length; i++) {
+      const g = this.blobGroups[i]
+      cb(g.position.x, g.position.y, this.radii[i])
     }
   }
 
   dispose(): void {
-    for (const m of this.meshes) {
-      ;(m.material as THREE.Material).dispose()
+    for (const g of this.blobGroups) {
+      g.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) {
+          obj.geometry.dispose()
+          const m = obj.material
+          if (Array.isArray(m)) m.forEach((x) => x.dispose())
+          else m.dispose()
+        }
+      })
     }
-    this.meshes.length = 0
-    this.sharedGeo.dispose()
+    this.blobGroups.length = 0
+    this.surfaceMats.length = 0
   }
 }

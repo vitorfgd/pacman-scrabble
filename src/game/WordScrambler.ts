@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { Letter } from './entities/Letter'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
+import { Letter, LETTER_TILE_DEPTH } from './entities/Letter'
 import { isVowelLetter } from './LetterScoring'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
@@ -29,50 +30,105 @@ export function pickRandomFieldLetter(): string {
  */
 export function makeFieldLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
   const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 256
+  canvas.width = 512
+  canvas.height = 512
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('Failed to create canvas context for letter texture')
 
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-
   const isDark = themeMode === 'dark'
+  ctx.fillStyle = isDark ? '#0c1e32' : '#f0f4ff'
+  ctx.fillRect(0, 0, 512, 512)
 
-  const baseFill = isDark ? 'rgba(8, 8, 18, 0.55)' : 'rgba(122, 54, 221, 0.10)'
-  const baseStroke = isDark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(122, 54, 221, 0.22)'
-  const shadowColor = isDark ? 'rgba(0,0,0,0.35)' : 'rgba(122, 54, 221, 0.25)'
-  const letterFill = isDark ? 'rgba(255,255,255,0.98)' : 'rgba(27, 31, 48, 0.96)'
-  const letterStroke = isDark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.7)'
-
-  const pad = 12
+  const pad = 28
   const rw = canvas.width - pad * 2
   const rh = canvas.height - pad * 2
-  const corner = 26
+  const corner = 36
   ctx.beginPath()
   ctx.roundRect(pad, pad, rw, rh, corner)
-  ctx.fillStyle = baseFill
+  const panelGrad = ctx.createLinearGradient(pad, pad, pad + rw, pad + rh)
+  if (isDark) {
+    panelGrad.addColorStop(0, '#152a42')
+    panelGrad.addColorStop(1, '#0a1628')
+  } else {
+    panelGrad.addColorStop(0, '#ffffff')
+    panelGrad.addColorStop(1, '#dde8ff')
+  }
+  ctx.fillStyle = panelGrad
   ctx.fill()
-  ctx.lineWidth = 7
-  ctx.strokeStyle = baseStroke
+  ctx.lineWidth = 10
+  ctx.strokeStyle = isDark ? 'rgba(160, 210, 255, 0.45)' : 'rgba(60, 80, 120, 0.35)'
   ctx.stroke()
 
   const cx = canvas.width / 2
-  const cy = canvas.height / 2 + 6
-  ctx.shadowColor = shadowColor
-  ctx.shadowBlur = 12
-  ctx.fillStyle = letterFill
-  ctx.font = 'bold 168px system-ui, Segoe UI, Roboto, sans-serif'
+  const cy = canvas.height / 2 + 4
+  const ch = char.toUpperCase()
+  ctx.font = '900 280px system-ui, "Segoe UI", Roboto, sans-serif'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.fillText(char.toUpperCase(), cx, cy)
-
-  ctx.shadowBlur = 0
-  ctx.strokeStyle = letterStroke
-  ctx.lineWidth = 12
-  ctx.strokeText(char.toUpperCase(), cx, cy)
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = isDark ? '#000000' : '#0a1020'
+  ctx.lineWidth = 18
+  ctx.strokeText(ch, cx, cy)
+  ctx.fillStyle = isDark ? '#ffffff' : '#0f1628'
+  ctx.fillText(ch, cx, cy)
+  ctx.lineWidth = 4
+  ctx.strokeStyle = isDark ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.9)'
+  ctx.strokeText(ch, cx, cy)
 
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 8
+  return tex
+}
+
+/** Deck tile for tail segments — same legibility as field letters (uniform scale; no stretched UVs). */
+export function makeCompartmentLetterTexture(char: string, themeMode: ThemeMode): THREE.Texture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 512
+  canvas.height = 512
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('canvas')
+
+  const isDark = themeMode === 'dark'
+  ctx.fillStyle = isDark ? '#0f2034' : '#e8eef8'
+  ctx.fillRect(0, 0, 512, 512)
+
+  const pad = 28
+  const rw = canvas.width - pad * 2
+  const rh = canvas.height - pad * 2
+  const corner = 36
+  ctx.beginPath()
+  ctx.roundRect(pad, pad, rw, rh, corner)
+  const panelGrad = ctx.createLinearGradient(pad, pad, pad + rw, pad + rh)
+  if (isDark) {
+    panelGrad.addColorStop(0, '#1a3550')
+    panelGrad.addColorStop(1, '#0c1828')
+  } else {
+    panelGrad.addColorStop(0, '#ffffff')
+    panelGrad.addColorStop(1, '#d8e4f8')
+  }
+  ctx.fillStyle = panelGrad
+  ctx.fill()
+  ctx.lineWidth = 10
+  ctx.strokeStyle = isDark ? 'rgba(255, 200, 120, 0.5)' : 'rgba(80, 100, 140, 0.35)'
+  ctx.stroke()
+
+  const cx = canvas.width / 2
+  const cy = canvas.height / 2 + 4
+  const ch = char.toUpperCase()
+  ctx.font = '900 280px system-ui, "Segoe UI", Roboto, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.lineJoin = 'round'
+  ctx.strokeStyle = isDark ? '#000000' : '#0a1020'
+  ctx.lineWidth = 18
+  ctx.strokeText(ch, cx, cy)
+  ctx.fillStyle = isDark ? '#ffffff' : '#0f1628'
+  ctx.fillText(ch, cx, cy)
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 8
   return tex
 }
 
@@ -80,6 +136,66 @@ interface StarterAnim {
   baseX: number
   baseY: number
   phaseOffset: number
+}
+
+function createLetterTileMesh(): {
+  root: THREE.Group
+  topMaterial: THREE.MeshPhysicalMaterial
+  sideMaterial: THREE.MeshStandardMaterial
+} {
+  const depth = LETTER_TILE_DEPTH
+  /** Chunky bevel + extra segments so edges read clearly in perspective. */
+  const geo = new RoundedBoxGeometry(1, 1, depth, 6, 0.11)
+  const topMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    roughness: 0.38,
+    metalness: 0,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.32,
+    transparent: true,
+  })
+  const sideMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2a3d52,
+    roughness: 0.48,
+    metalness: 0,
+  })
+  const bottomMaterial = new THREE.MeshStandardMaterial({
+    color: 0x040810,
+    roughness: 0.9,
+    metalness: 0,
+  })
+  const mesh = new THREE.Mesh(geo, [sideMaterial, sideMaterial, sideMaterial, sideMaterial, topMaterial, bottomMaterial])
+  mesh.renderOrder = 1
+  const root = new THREE.Group()
+  root.add(mesh)
+
+  /** Dark base plinth — gives a clear “block sitting on the deck” silhouette. */
+  const plinthD = 0.09
+  const plinthGeo = new RoundedBoxGeometry(1.16, 1.16, plinthD, 4, 0.07)
+  const plinthMat = new THREE.MeshStandardMaterial({
+    color: 0x0c141c,
+    roughness: 0.72,
+    metalness: 0,
+  })
+  const plinth = new THREE.Mesh(plinthGeo, plinthMat)
+  plinth.position.z = -depth / 2 - plinthD / 2
+  plinth.renderOrder = 0
+  root.add(plinth)
+
+  return { root, topMaterial, sideMaterial }
+}
+
+/** Extra height for tail / body letters so tiles don’t z-fight the ocean. (World up = +Z.) */
+export const BODY_LETTER_Z_LIFT = 0.32
+
+/** World Z for tile center so the bottom face sits just above the arena floor. */
+export function letterAnchorZ(scale: number): number {
+  return (LETTER_TILE_DEPTH * scale) / 2 + 0.08
+}
+
+/** When root scale is non-uniform (cargo compartments), use Z scale for foot height. */
+export function letterAnchorZFromRootScale(scale: THREE.Vector3): number {
+  return (LETTER_TILE_DEPTH * scale.z) / 2 + 0.08
 }
 
 export class WordScrambler {
@@ -93,6 +209,7 @@ export class WordScrambler {
 
   private readonly letters: Letter[] = []
   private readonly textureByChar = new Map<string, THREE.Texture>()
+  private readonly compartmentTextureByChar = new Map<string, THREE.Texture>()
   private themeMode: ThemeMode = 'dark'
 
   // Starter-letter tracking — using a Set so there is zero ambiguity about
@@ -129,20 +246,11 @@ export class WordScrambler {
 
   private buildPool() {
     for (let i = 0; i < this.maxLetters; i++) {
-      const sprite = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          color: 0xffffff,
-          transparent: true,
-          opacity: 1,
-          depthTest: false,
-          depthWrite: false,
-        }),
-      )
-      sprite.scale.setScalar(this.letterRadius)
-      sprite.position.set(0, 0, 1)
-      sprite.renderOrder = 1
-      this.scene.add(sprite)
-      this.letters.push(new Letter(sprite, '', this.letterRadius))
+      const { root, topMaterial, sideMaterial } = createLetterTileMesh()
+      root.scale.setScalar(this.letterRadius)
+      root.position.set(0, 0, letterAnchorZ(this.letterRadius))
+      this.scene.add(root)
+      this.letters.push(new Letter(root, topMaterial, sideMaterial, '', this.letterRadius))
     }
   }
 
@@ -154,16 +262,23 @@ export class WordScrambler {
     return tex
   }
 
+  private getCompartmentTexture(char: string): THREE.Texture {
+    const existing = this.compartmentTextureByChar.get(char)
+    if (existing) return existing
+    const tex = makeCompartmentLetterTexture(char, this.themeMode)
+    this.compartmentTextureByChar.set(char, tex)
+    return tex
+  }
+
   setThemeMode(themeMode: ThemeMode): void {
     if (this.themeMode === themeMode) return
     this.themeMode = themeMode
-    // Textures are theme-specific, so clear the cache and refresh active sprites.
     this.textureByChar.clear()
+    this.compartmentTextureByChar.clear()
     for (const l of this.letters) {
       if (!l.isActive()) continue
-      const mat = l.sprite.material as THREE.SpriteMaterial
-      mat.map = this.getLetterTexture(l.char)
-      mat.needsUpdate = true
+      l.topMaterial.map = this.bodyLetterSet.has(l) ? this.getCompartmentTexture(l.char) : this.getLetterTexture(l.char)
+      l.topMaterial.needsUpdate = true
     }
   }
 
@@ -187,15 +302,13 @@ export class WordScrambler {
   }
 
   /**
-   * Field letter becomes a snake body segment (same sprite). Call after spawnReplacementLetter.
+   * Field letter becomes a snake body segment (same 3D tile). Call after spawnReplacementLetter.
    */
   promoteFieldLetterToBody(letter: Letter): void {
     this.starterLetterSet.delete(letter)
     this.starterAnimData.delete(letter)
     this.bodyLetterSet.add(letter)
-    const s = this.letterRadius * 0.82
-    letter.sprite.scale.setScalar(s)
-    letter.sprite.position.z = 1
+    this.applyBodyCompartmentVisual(letter)
   }
 
   /**
@@ -205,11 +318,25 @@ export class WordScrambler {
     const slot = this.getInactiveLetter()
     if (!slot) return null
     this.applyLetterVisual(slot, char)
-    const s = this.letterRadius * 0.82
-    slot.sprite.scale.setScalar(s)
     this.bodyLetterSet.add(slot)
-    slot.sprite.position.z = 1
+    this.applyBodyCompartmentVisual(slot)
     return slot
+  }
+
+  /** Uniform deck tile — avoids stretched geometry and texture clipping from non-uniform scale. */
+  private applyBodyCompartmentVisual(letter: Letter): void {
+    const s = this.letterRadius * 0.92
+    letter.root.scale.setScalar(s)
+    letter.root.rotation.z = 0
+    letter.topMaterial.map = this.getCompartmentTexture(letter.char)
+    const vowel = isVowelLetter(letter.char)
+    letter.topMaterial.color.set(0xffffff)
+    letter.sideMaterial.color.set(vowel ? 0x2a4a58 : 0x3a3858)
+    letter.topMaterial.emissive.set(vowel ? 0x224438 : 0x302848)
+    letter.topMaterial.emissiveIntensity = 0.1
+    letter.topMaterial.needsUpdate = true
+    letter.sideMaterial.needsUpdate = true
+    letter.root.position.z = letterAnchorZ(s) + BODY_LETTER_Z_LIFT
   }
 
   releaseBodyLetter(letter: Letter): void {
@@ -227,24 +354,26 @@ export class WordScrambler {
 
     letter.setChar(ch)
     letter.setActive(true)
-    letter.sprite.scale.setScalar(this.letterRadius)
+    letter.root.scale.setScalar(this.letterRadius)
+    letter.root.position.z = letterAnchorZ(this.letterRadius)
     const tex = this.getLetterTexture(ch)
-    const mat = letter.sprite.material as THREE.SpriteMaterial
-    mat.map = tex
+    letter.topMaterial.map = tex
     const vowel = isVowelLetter(ch)
-    mat.color.set(vowel ? 0x6bcb77 : 0xc084fc)
-    mat.needsUpdate = true
-    mat.depthTest = false
-    mat.depthWrite = false
+    letter.topMaterial.color.set(0xffffff)
+    letter.sideMaterial.color.set(vowel ? 0x2a4a58 : 0x3a3858)
+    letter.topMaterial.emissive.set(vowel ? 0x224438 : 0x382848)
+    letter.topMaterial.emissiveIntensity = 0.12
+    letter.topMaterial.needsUpdate = true
+    letter.sideMaterial.needsUpdate = true
   }
 
   private placeSingleLetterRandom(letter: Letter): void {
     const margin = Math.max(120, this.letterRadius * 4.2)
     const p = this.randomInBounds(margin)
-    letter.sprite.position.set(
+    letter.root.position.set(
       THREE.MathUtils.clamp(p.x, this.bounds.minX + this.letterRadius, this.bounds.maxX - this.letterRadius),
       THREE.MathUtils.clamp(p.y, this.bounds.minY + this.letterRadius, this.bounds.maxY - this.letterRadius),
-      1,
+      letterAnchorZ(this.letterRadius),
     )
   }
 
@@ -291,7 +420,7 @@ export class WordScrambler {
         const angle = Math.random() * Math.PI * 2
         const dist = Math.sqrt(Math.random()) * clusterRadius
 
-        l.sprite.position.set(
+        l.root.position.set(
           THREE.MathUtils.clamp(
             center.x + Math.cos(angle) * dist,
             this.bounds.minX + this.letterRadius,
@@ -302,7 +431,7 @@ export class WordScrambler {
             this.bounds.minY + this.letterRadius,
             this.bounds.maxY - this.letterRadius,
           ),
-          1,
+          letterAnchorZ(this.letterRadius),
         )
       }
     }
@@ -346,10 +475,10 @@ export class WordScrambler {
       if (!slot) return
 
       this.applyLetterVisual(slot, chars[i])
-      slot.sprite.scale.setScalar(starterScale)
+      slot.root.scale.setScalar(starterScale)
 
       const bx = center.x - totalWidth / 2 + i * spacing
-      slot.sprite.position.set(bx, by, 2)
+      slot.root.position.set(bx, by, letterAnchorZ(starterScale) + 0.52)
 
       this.starterLetterSet.add(slot)
       this.starterAnimData.set(slot, { baseX: bx, baseY: by, phaseOffset: i / chars.length })
@@ -363,13 +492,15 @@ export class WordScrambler {
       if (!letter.isActive()) continue
       const data = this.starterAnimData.get(letter)
       if (!data) continue
-      const mat = letter.sprite.material as THREE.SpriteMaterial
       const vowel = isVowelLetter(letter.char)
       const hue = vowel ? 0.33 : 0.79
       const pulse = 0.55 + 0.15 * Math.sin(t * 3.0 + data.phaseOffset * Math.PI * 2)
-      mat.color.setHSL(hue, 1.0, pulse)
+      letter.topMaterial.color.set(0xffffff)
+      letter.topMaterial.emissive.setHSL(hue, 0.55, pulse * 0.22)
+      letter.topMaterial.emissiveIntensity = 0.2
+      letter.sideMaterial.color.setHSL(hue, 0.45, 0.28 + pulse * 0.12)
       const bobY = Math.sin(t * 3.0 + data.phaseOffset * Math.PI * 2) * 10
-      letter.sprite.position.set(data.baseX, data.baseY + bobY, 2)
+      letter.root.position.set(data.baseX, data.baseY + bobY, letterAnchorZ(this.starterScale) + 0.52)
     }
   }
 
@@ -421,10 +552,10 @@ export class WordScrambler {
         x += (fwd.x / len) * (55 + i * 8)
         y += (fwd.y / len) * (55 + i * 8)
       }
-      slot.sprite.position.set(
+      slot.root.position.set(
         THREE.MathUtils.clamp(x, this.bounds.minX + margin, this.bounds.maxX - margin),
         THREE.MathUtils.clamp(y, this.bounds.minY + margin, this.bounds.maxY - margin),
-        1,
+        letterAnchorZ(this.letterRadius),
       )
     }
   }
