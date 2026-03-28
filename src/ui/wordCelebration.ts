@@ -191,10 +191,12 @@ export function playResetCelebration(
   headline.textContent = title
   stack.appendChild(headline)
 
-  const sub = document.createElement('div')
-  sub.className = 'reset-cele-subtitle'
-  sub.textContent = subtitle
-  stack.appendChild(sub)
+  if (subtitle.trim()) {
+    const sub = document.createElement('div')
+    sub.className = 'reset-cele-subtitle'
+    sub.textContent = subtitle
+    stack.appendChild(sub)
+  }
 
   container.appendChild(stack)
 

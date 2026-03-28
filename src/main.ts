@@ -21,22 +21,22 @@ if (!app) throw new Error('Missing #app element')
 const gameEl = document.getElementById('game')
 if (!gameEl) throw new Error('Missing #game element')
 
-function isViewportPortrait(): boolean {
-  return window.innerHeight > window.innerWidth
-}
-
 // Default mode only (no theme switching).
 document.documentElement.dataset.theme = 'dark'
 
+/** Game layout + logic always use portrait (9:16 stage is letterboxed in CSS). */
 function applyOrientationState() {
-  document.documentElement.dataset.orientation = isViewportPortrait() ? 'portrait' : 'landscape'
+  document.documentElement.dataset.orientation = 'portrait'
 }
 
 applyOrientationState()
 
-// Keep the app fullscreen; Three.js will create the canvas inside #game.
-app.style.width = '100vw'
-app.style.height = '100vh'
+function tryLockPortraitOrientation(): void {
+  const o = screen.orientation as ScreenOrientation & { lock?: (type: string) => Promise<void> }
+  if (o?.lock) {
+    void o.lock('portrait').catch(() => {})
+  }
+}
 
 const game = new Game({ container: gameEl })
 game.start()
@@ -44,3 +44,6 @@ game.start()
 window.addEventListener('resize', () => {
   applyOrientationState()
 })
+
+window.addEventListener('pointerdown', tryLockPortraitOrientation, { once: true, passive: true })
+window.addEventListener('keydown', tryLockPortraitOrientation, { once: true })

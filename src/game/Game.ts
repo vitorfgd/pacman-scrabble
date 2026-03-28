@@ -154,6 +154,11 @@ export class Game {
   private ownedSkins = new Set<SkinId>(['default'])
   private equippedSkinId: SkinId = 'default'
   private bodyRingMaterial: THREE.MeshStandardMaterial | null = null
+  /** Trail segment discs: same animated canvas as the head when Safe Zone skin is equipped. */
+  private bodyRingSafeZoneMaterial: THREE.MeshBasicMaterial | null = null
+  private bodyRingSafeZoneTexture: THREE.CanvasTexture | null = null
+  private bodyRingSafeZoneCtx: CanvasRenderingContext2D | null = null
+  private readonly bodyRingSafeZoneTexSize = 160
   private shopUiBound = false
 
   private score = 0
@@ -214,7 +219,7 @@ export class Game {
   private running = false
   private lastMs = 0
   private initialPlayerSize = 28
-  private cameraViewHeightWorld = 1380
+  private cameraViewHeightWorld = 1780
   private readonly cameraFollowSpeed = 5.2
   private viewportProfile: ViewportProfile = this.computeViewportProfile()
 
@@ -285,17 +290,67 @@ export class Game {
   private applySkinDef(skin: SkinDef): void {
     if (skin.id === 'safezone') {
       this.player.setHeadVisual('safezone')
-      this.player.tickSafeZoneHeadTexture(performance.now(), false)
+      this.player.tickSafeZoneHeadTexture(performance.now())
     } else {
       this.player.setHeadVisual('standard')
       this.player.applySkin(skin.headColor, skin.headEmissive, skin.headEmissiveIntensity)
     }
-    if (this.bodyRingMaterial) {
+    if (this.bodyRingMaterial && skin.id !== 'safezone') {
       this.bodyRingMaterial.color.setHex(skin.headColor)
       this.bodyRingMaterial.emissive.setHex(skin.headEmissive)
       this.bodyRingMaterial.emissiveIntensity = skin.headEmissiveIntensity * 0.92
     }
+    this.assignBodyRingMaterialsForSkin()
+    this.refreshAllBodyLetterSkinStyles()
     this.applyTrayColorsFromSkin(skin)
+  }
+
+  private ensureBodyRingSafeZoneMaterial(): void {
+    if (this.bodyRingSafeZoneMaterial) return
+    const canvas = document.createElement('canvas')
+    canvas.width = this.bodyRingSafeZoneTexSize
+    canvas.height = this.bodyRingSafeZoneTexSize
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 2d')
+    this.bodyRingSafeZoneCtx = ctx
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.colorSpace = THREE.SRGBColorSpace
+    tex.minFilter = THREE.LinearFilter
+    tex.magFilter = THREE.LinearFilter
+    this.bodyRingSafeZoneTexture = tex
+    this.bodyRingSafeZoneMaterial = new THREE.MeshBasicMaterial({
+      map: tex,
+      transparent: false,
+    })
+  }
+
+  private assignBodyRingMaterialsForSkin(): void {
+    if (!this.bodyRingMaterial || this.playerBodyRings.length === 0) return
+    if (this.equippedSkinId === 'safezone') {
+      this.ensureBodyRingSafeZoneMaterial()
+      for (const r of this.playerBodyRings) {
+        r.material = this.bodyRingSafeZoneMaterial!
+      }
+    } else {
+      for (const r of this.playerBodyRings) {
+        r.material = this.bodyRingMaterial
+      }
+    }
+  }
+
+  private styleBodyLetterForSkin(letter: Letter): void {
+    const mat = letter.sprite.material as THREE.SpriteMaterial
+    if (this.equippedSkinId === 'safezone') {
+      mat.color.set(0xffffff)
+    } else {
+      const vowel = isVowelLetter(letter.char)
+      mat.color.set(vowel ? 0x6bcb77 : 0xc084fc)
+    }
+    mat.needsUpdate = true
+  }
+
+  private refreshAllBodyLetterSkinStyles(): void {
+    for (const L of this.playerBodyLetters) this.styleBodyLetterForSkin(L)
   }
 
   /** HTML tray rings + text track the same palette as the player head. */
@@ -366,7 +421,7 @@ export class Game {
         sc.height = 64
         const sctx = sc.getContext('2d')
         if (sctx) {
-          drawSafeZoneCircleHeadTexture(sctx, 64, performance.now(), false)
+          drawSafeZoneCircleHeadTexture(sctx, 64, performance.now(), true)
           sw.style.background = `url(${sc.toDataURL()}) center / cover no-repeat`
         } else {
           sw.style.background = `#${skin.headColor.toString(16).padStart(6, '0')}`
@@ -516,7 +571,7 @@ export class Game {
     const portrait = this.isPortraitMode()
     if (!portrait) {
       return {
-        cameraViewHeightWorld: 1280,
+        cameraViewHeightWorld: 1720,
         playerSize: 28,
         letterRadius: 54,
         starterScale: 58,
@@ -529,7 +584,7 @@ export class Game {
       }
     }
     return {
-      cameraViewHeightWorld: 1500,
+      cameraViewHeightWorld: 1980,
       playerSize: 34,
       letterRadius: 70,
       starterScale: 72,
@@ -628,7 +683,7 @@ export class Game {
       this.scene.add(e.mesh)
       e.setActive(false, new THREE.Vector2(0, 0), 10)
       this.enemyPool.push(e)
-      this.enemySpeedScales.push(1.22 + Math.random() * 0.95)
+      this.enemySpeedScales.push(1.38 + Math.random() * 0.62)
       this.enemyLastHitMs.push(0)
       this.enemyNearMissLastMs.push(0)
     }
@@ -915,7 +970,7 @@ export class Game {
   }
 
   private spawnEnemyAtIndex(i: number): void {
-    const r = (18 + Math.random() * 20) * this.viewportProfile.enemyBaseRadiusScale
+    const r = (28 + Math.random() * 14) * this.viewportProfile.enemyBaseRadiusScale
     const tmp = new THREE.Vector2()
     this.placeEnemySpawnPosition(tmp, r)
     const enemy = this.enemyPool[i]
@@ -979,10 +1034,16 @@ export class Game {
       speedMultiplier: 1,
     })
     if (this.equippedSkinId === 'safezone') {
-      const pr = this.player.getRadius()
-      const pp = this.player.mesh.position
-      const inSubmit = Game.circleIntersectsRect(pp.x, pp.y, pr, this.submitZone)
-      this.player.tickSafeZoneHeadTexture(nowMs, inSubmit)
+      this.player.tickSafeZoneHeadTexture(nowMs)
+      if (this.bodyRingSafeZoneCtx && this.bodyRingSafeZoneTexture) {
+        drawSafeZoneCircleHeadTexture(
+          this.bodyRingSafeZoneCtx,
+          this.bodyRingSafeZoneTexSize,
+          nowMs,
+          true,
+        )
+        this.bodyRingSafeZoneTexture.needsUpdate = true
+      }
     }
     this.checkBlobPlayerCollision()
     this.updateTrayPosition()
@@ -1095,11 +1156,12 @@ export class Game {
       const dx = playerPos.x - letter.sprite.position.x
       const dy = playerPos.y - letter.sprite.position.y
       const r = playerRadius + letter.radius * 0.82
-      if (dx * dx + dy * dy <= r * r * 0.85) {
+        if (dx * dx + dy * dy <= r * r * 0.85) {
         this.tray.push(letter.char)
         this.wordScrambler.spawnReplacementLetter()
         this.wordScrambler.promoteFieldLetterToBody(letter)
         this.playerBodyLetters.push(letter)
+        this.styleBodyLetterForSkin(letter)
         changed = true
       }
     }
@@ -1133,7 +1195,7 @@ export class Game {
 
   private static runEndedSubtitle(finalScore: number, prevRun: number): string {
     if (prevRun <= 0 && finalScore <= 0) {
-      return 'Collect letters and submit in the rainbow zone to score.'
+      return ''
     }
     if (prevRun <= 0) {
       return `This run: ${finalScore.toLocaleString()} — nothing to compare yet (first recorded run).`
@@ -1297,7 +1359,7 @@ export class Game {
         this.enemyLastHitMs[i] = nowMs
 
         if (this.powerModeActive) {
-          this.enemySpeedScales[i] = 1.05 + Math.random() * 0.9
+          this.enemySpeedScales[i] = 1.25 + Math.random() * 0.58
           enemy.setActive(false, tmpOff, 10)
         } else {
           this.requestReset()

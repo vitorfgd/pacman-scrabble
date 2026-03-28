@@ -3,26 +3,54 @@ import * as THREE from 'three'
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
 
 /**
+ * Flat hexagon — reads as a hostile “chaser” / drone, not a star-shaped pickup.
+ */
+function createHunterHexGeometry(): THREE.ShapeGeometry {
+  const shape = new THREE.Shape()
+  const sides = 6
+  const r = 1
+  for (let i = 0; i < sides; i++) {
+    const a = (i / sides) * Math.PI * 2 - Math.PI / 2
+    const x = Math.cos(a) * r
+    const y = Math.sin(a) * r
+    if (i === 0) shape.moveTo(x, y)
+    else shape.lineTo(x, y)
+  }
+  shape.closePath()
+  return new THREE.ShapeGeometry(shape)
+}
+
+/**
  * Patrols between waypoints; when the player is within aggro range, locks onto a straight
  * dash toward them (bullet-like, no steering) for a few seconds, then returns to patrol.
  */
 export class Enemy {
-  readonly mesh: THREE.Mesh
+  private static readonly sharedGeometry: THREE.ShapeGeometry = createHunterHexGeometry()
+
+  /** Root group (position / scale / spin). Game uses this like a mesh. */
+  readonly mesh: THREE.Group
+
+  private readonly coreMesh: THREE.Mesh
+  private readonly glowMesh: THREE.Mesh
+  private readonly coreMat: THREE.MeshStandardMaterial
+  private readonly glowMat: THREE.MeshBasicMaterial
 
   private active = false
   private originalRadius = 10
   private slowUntilMs = 0
   private pulseTimer = 0
 
-  private readonly enemyBlue = new THREE.Color(0x2a7fff)
   private readonly powerShrink = 0.65
-  private originalColor = new THREE.Color(0xff4d4d)
+  private originalColor = new THREE.Color()
+  private originalEmissive = new THREE.Color()
+  private originalGlowColor = new THREE.Color()
+  private baseEmissiveIntensity = 3.35
 
   /** Squared distance to player to trigger a straight-line dash. */
   private readonly aggroRangeSq = 520 * 520
   /** How long the dash lasts before returning to patrol. */
   private readonly dashDurationMs = 2200
-  private readonly dashSpeedMult = 5.4
+  private readonly dashSpeedMult = 6.2
   private dashActive = false
   private dashEndMs = 0
   private readonly dashDir = new THREE.Vector2(1, 0)
@@ -34,16 +62,35 @@ export class Enemy {
   private gateAvoidRect: Bounds | null = null
 
   constructor() {
-    const geometry = new THREE.CircleGeometry(1, 3)
-    const material = new THREE.MeshStandardMaterial({
-      color: 0xff4d4d,
+    this.coreMat = new THREE.MeshStandardMaterial({
+      color: 0x120308,
       emissive: new THREE.Color(0xff2200),
-      emissiveIntensity: 0.0,
-      roughness: 0.6,
-      metalness: 0.15,
+      emissiveIntensity: 3.35,
+      metalness: 0.42,
+      roughness: 0.22,
     })
-    this.mesh = new THREE.Mesh(geometry, material)
-    this.mesh.position.set(0, 0, 0)
+    this.glowMat = new THREE.MeshBasicMaterial({
+      color: 0xff3a18,
+      transparent: true,
+      opacity: 0.78,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    })
+
+    this.coreMesh = new THREE.Mesh(Enemy.sharedGeometry, this.coreMat)
+    this.coreMesh.position.z = 0.06
+    this.coreMesh.renderOrder = 14
+
+    this.glowMesh = new THREE.Mesh(Enemy.sharedGeometry, this.glowMat)
+    this.glowMesh.scale.setScalar(1.3)
+    this.glowMesh.position.z = 0
+    this.glowMesh.renderOrder = 13
+
+    this.mesh = new THREE.Group()
+    this.mesh.add(this.glowMesh)
+    this.mesh.add(this.coreMesh)
+    this.mesh.position.set(0, 0, 1)
     this.mesh.visible = false
   }
 
@@ -76,11 +123,17 @@ export class Enemy {
     this.dashActive = false
     this.dashEndMs = 0
 
-    const mat = this.mesh.material as THREE.MeshStandardMaterial
     const hue = Math.random()
-    mat.color.setHSL(hue, 0.95, 0.52)
-    mat.emissive.setHSL(hue, 0.9, 0.32)
-    this.originalColor = mat.color.clone()
+    this.originalColor.setHSL(hue, 0.97, 0.22)
+    this.coreMat.color.copy(this.originalColor)
+    this.originalEmissive.setHSL((hue + 0.02) % 1, 1, 0.52)
+    this.coreMat.emissive.copy(this.originalEmissive)
+    this.baseEmissiveIntensity = 3.1 + Math.random() * 0.55
+    this.coreMat.emissiveIntensity = this.baseEmissiveIntensity
+
+    this.originalGlowColor.setHSL((hue + 0.01) % 1, 1, 0.64)
+    this.glowMat.color.copy(this.originalGlowColor)
+    this.glowMat.opacity = 0.72
   }
 
   /** Call after setActive when spawning; also sets first waypoint outside the gate zone. */
@@ -207,72 +260,74 @@ export class Enemy {
       if (this.dashActive) {
         dir.copy(this.dashDir)
       } else {
-      const toPx = playerPos.x - pos.x
-      const toPy = playerPos.y - pos.y
-      const distSq = toPx * toPx + toPy * toPy
-      if (
-        !playerInSafeZone &&
-        distSq > 1e-6 &&
-        distSq <= this.aggroRangeSq
-      ) {
-        this.dashDir.set(toPx, toPy)
-        const len = this.dashDir.length()
-        if (len > 1e-6) this.dashDir.divideScalar(len)
-        else this.dashDir.set(1, 0)
-        this.dashActive = true
-        this.dashEndMs = nowMs + this.dashDurationMs
-        dir.copy(this.dashDir)
-      } else {
-      const wp = this.patrolWaypoint
-      const r = this.getRadius()
-      const avoid = this.gateAvoidRect
-      const clearance = r + 28
-
-      const d = Math.hypot(wp.x - pos.x, wp.y - pos.y)
-      if (d < 160 + r) {
-        this.refreshPatrolWaypoint()
-      } else if (avoid && Enemy.segmentIntersectsRect(pos.x, pos.y, wp.x, wp.y, avoid)) {
-        this.refreshPatrolWaypoint()
-      }
-
-      const wp2 = this.patrolWaypoint
-      const desired = new THREE.Vector2(wp2.x - pos.x, wp2.y - pos.y)
-      let len = desired.length()
-
-      if (avoid && Enemy.pointInRect(pos.x, pos.y, avoid)) {
-        const out = Enemy.nearestOutsidePoint(pos.x, pos.y, avoid, clearance)
-        desired.set(out.x - pos.x, out.y - pos.y)
-        len = desired.length()
-        if (len < 1e-6) {
-          desired.set(Math.random() - 0.5, Math.random() - 0.5).normalize()
+        const toPx = playerPos.x - pos.x
+        const toPy = playerPos.y - pos.y
+        const distSq = toPx * toPx + toPy * toPy
+        if (!playerInSafeZone && distSq > 1e-6 && distSq <= this.aggroRangeSq) {
+          this.dashDir.set(toPx, toPy)
+          const len = this.dashDir.length()
+          if (len > 1e-6) this.dashDir.divideScalar(len)
+          else this.dashDir.set(1, 0)
+          this.dashActive = true
+          this.dashEndMs = nowMs + this.dashDurationMs
+          dir.copy(this.dashDir)
         } else {
-          desired.divideScalar(len)
+          const wp = this.patrolWaypoint
+          const r = this.getRadius()
+          const avoid = this.gateAvoidRect
+          const clearance = r + 28
+
+          const d = Math.hypot(wp.x - pos.x, wp.y - pos.y)
+          if (d < 160 + r) {
+            this.refreshPatrolWaypoint()
+          } else if (avoid && Enemy.segmentIntersectsRect(pos.x, pos.y, wp.x, wp.y, avoid)) {
+            this.refreshPatrolWaypoint()
+          }
+
+          const wp2 = this.patrolWaypoint
+          const desired = new THREE.Vector2(wp2.x - pos.x, wp2.y - pos.y)
+          let len = desired.length()
+
+          if (avoid && Enemy.pointInRect(pos.x, pos.y, avoid)) {
+            const out = Enemy.nearestOutsidePoint(pos.x, pos.y, avoid, clearance)
+            desired.set(out.x - pos.x, out.y - pos.y)
+            len = desired.length()
+            if (len < 1e-6) {
+              desired.set(Math.random() - 0.5, Math.random() - 0.5).normalize()
+            } else {
+              desired.divideScalar(len)
+            }
+            this.steer.copy(desired)
+            dir.copy(this.steer)
+          } else {
+            if (len > 0.0001) desired.divideScalar(len)
+            else desired.set(1, 0)
+
+            const turn = Math.min(1, deltaSeconds * 10)
+            this.steer.lerp(desired, turn)
+            if (this.steer.lengthSq() > 1e-8) this.steer.normalize()
+            dir.copy(this.steer)
+          }
         }
-        this.steer.copy(desired)
-        dir.copy(this.steer)
-      } else {
-        if (len > 0.0001) desired.divideScalar(len)
-        else desired.set(1, 0)
-
-        const turn = Math.min(1, deltaSeconds * 10)
-        this.steer.lerp(desired, turn)
-        if (this.steer.lengthSq() > 1e-8) this.steer.normalize()
-        dir.copy(this.steer)
-      }
-      }
       }
     }
 
-    this.pulseTimer += deltaSeconds * (!fleeMode ? 4 : 2.5)
-    const mat = this.mesh.material as THREE.MeshStandardMaterial
+    this.pulseTimer += deltaSeconds * (!fleeMode ? 5.2 : 2.8)
+    this.mesh.rotation.z += deltaSeconds * (fleeMode ? 0.62 : 0.34)
+
     if (!fleeMode) {
-      mat.emissiveIntensity = 0.2 + 0.45 * Math.abs(Math.sin(this.pulseTimer))
+      const wobble = 0.55 + 0.45 * Math.abs(Math.sin(this.pulseTimer))
+      this.coreMat.emissiveIntensity = this.baseEmissiveIntensity * (0.88 + 0.42 * wobble)
+      this.glowMat.opacity = 0.55 + 0.38 * wobble
+    } else {
+      this.coreMat.emissiveIntensity = 3.85
+      this.glowMat.opacity = 0.78
     }
 
-    const fleeBoost = fleeMode ? 1.3 : 1.0
+    const fleeBoost = fleeMode ? 1.35 : 1.0
     const dashBoost = !fleeMode && this.dashActive ? this.dashSpeedMult : 1.0
     const slowMult = nowMs < this.slowUntilMs ? 0.22 : 1.0
-    const baseMove = 68
+    const baseMove = 88
     const speed = speedScale * slowMult * fleeBoost * dashBoost * baseMove
 
     pos.x += dir.x * speed * deltaSeconds
@@ -293,15 +348,20 @@ export class Enemy {
   }
 
   setPowerMode(active: boolean): void {
-    const mat = this.mesh.material as THREE.MeshStandardMaterial
     if (!this.active) return
     if (active) {
-      mat.color.copy(this.enemyBlue)
-      mat.emissive.set(0x0044aa)
+      this.coreMat.color.setHex(0x0a1838)
+      this.coreMat.emissive.setHex(0x3388ff)
+      this.coreMat.emissiveIntensity = 4.1
+      this.glowMat.color.setHex(0x66ccff)
+      this.glowMat.opacity = 0.88
       this.mesh.scale.setScalar(this.originalRadius * this.powerShrink)
     } else {
-      mat.color.copy(this.originalColor)
-      mat.emissive.copy(this.originalColor).multiplyScalar(0.6)
+      this.coreMat.color.copy(this.originalColor)
+      this.coreMat.emissive.copy(this.originalEmissive)
+      this.coreMat.emissiveIntensity = this.baseEmissiveIntensity
+      this.glowMat.color.copy(this.originalGlowColor)
+      this.glowMat.opacity = 0.72
       this.mesh.scale.setScalar(this.originalRadius)
     }
   }

@@ -4,13 +4,29 @@ export type BlobBounds = { minX: number; maxX: number; minY: number; maxY: numbe
 
 export type BlobAvoidRect = { minX: number; maxX: number; minY: number; maxY: number }
 
+/** Many shallow spikes (inner near outer) — reads as textured hazard, not octagon enemies. */
+function createSpikyBlobGeometry(spikeCount: number, outer = 1, inner = 0.9): THREE.ShapeGeometry {
+  const shape = new THREE.Shape()
+  const n = spikeCount * 2
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2
+    const rad = i % 2 === 0 ? outer : inner
+    const x = Math.cos(a) * rad
+    const y = Math.sin(a) * rad
+    if (i === 0) shape.moveTo(x, y)
+    else shape.lineTo(x, y)
+  }
+  shape.closePath()
+  return new THREE.ShapeGeometry(shape)
+}
+
 /** Drifting hazards: collide with player (handled in Game). Kept out of the submit zone. */
 export class AmbientBlobs {
   private static readonly SPEED_MAX = 28
   private static readonly SPEED_MIN = 6
 
   readonly group = new THREE.Group()
-  private readonly sharedGeo: THREE.CircleGeometry
+  private readonly sharedGeo: THREE.ShapeGeometry
   private readonly meshes: THREE.Mesh[] = []
   private readonly vx: number[] = []
   private readonly vy: number[] = []
@@ -20,7 +36,7 @@ export class AmbientBlobs {
   constructor(count: number, arena: BlobBounds, avoidRect: BlobAvoidRect) {
     this.group.position.z = 0
     this.avoidRect = avoidRect
-    this.sharedGeo = new THREE.CircleGeometry(1, 40)
+    this.sharedGeo = createSpikyBlobGeometry(26, 1, 0.9)
     for (let i = 0; i < count; i++) {
       const hue = (i * 0.618033988749895 + Math.random() * 0.08) % 1
       const c = new THREE.Color().setHSL(hue, 0.62 + Math.random() * 0.28, 0.48 + Math.random() * 0.12)

@@ -3,37 +3,49 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0"
+    />
     <title>PacMan Scrabble</title>
   </head>
   <body>
     <div id="app">
-      <!-- Three.js canvas -->
-      <div id="game"></div>
+      <!-- Fixed 9:16 portrait frame; overlays positioned inside this layer -->
+      <div id="stage" class="game-stage">
+        <!-- Three.js canvas -->
+        <div id="game"></div>
 
-      <button type="button" id="shopToggle" class="shop-exclusive-btn" aria-label="Open customize store">
-        Customize Store
-      </button>
+        <button type="button" id="shopToggle" class="shop-exclusive-btn" aria-label="Open customize store">
+          Customize Store
+        </button>
 
-      <!-- HUD -->
-      <div id="hudCorner" aria-label="Game HUD">
-        <div id="hudInfo">
-          <div class="hud-stats" aria-label="Score and gold">
-            <div class="hud-row score-hud-row">
-              <span class="score-label">SCORE</span>
-              <div class="score-line">
-                <span id="scoreValue" class="score-value">0</span>
+        <!-- HUD -->
+        <div id="hudCorner" aria-label="Game HUD">
+          <div id="hudInfo">
+            <div class="hud-stats" aria-label="Score and gold">
+              <div class="hud-row score-hud-row">
+                <span class="score-label">SCORE</span>
+                <div class="score-line">
+                  <span id="scoreValue" class="score-value">0</span>
+                </div>
+              </div>
+              <div class="hud-row coin-hud-row">
+                <span class="coin-label">GOLD</span>
+                <span id="coinValue" class="coin-value">0</span>
               </div>
             </div>
-            <div class="hud-row coin-hud-row">
-              <span class="coin-label">GOLD</span>
-              <span id="coinValue" class="coin-value">0</span>
+            <div class="hud-row hud-muted">
+              <span id="powerMode" class="power-mode"></span>
             </div>
           </div>
-          <div class="hud-row hud-muted">
-            <span id="powerMode" class="power-mode"></span>
-          </div>
         </div>
+
+        <!-- Floating tray — positioned via JS to follow the player -->
+        <div id="tray" class="tray" aria-label="Collected letters"></div>
+
+        <!-- Word completion: confetti + praise (filled by JS) -->
+        <div id="wordCelebration" class="word-celebration-root" aria-hidden="true"></div>
       </div>
 
       <div
@@ -51,13 +63,6 @@
           <div id="shopSkinList" class="shop-skin-list"></div>
         </div>
       </div>
-
-      <!-- Floating tray — positioned via JS to follow the player -->
-      <div id="tray" class="tray" aria-label="Collected letters"></div>
-
-      <!-- Word completion: confetti + praise (filled by JS) -->
-      <div id="wordCelebration" class="word-celebration-root" aria-hidden="true"></div>
-
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

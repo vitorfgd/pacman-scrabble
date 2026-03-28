@@ -74,9 +74,12 @@ export class Player {
     }
   }
 
-  tickSafeZoneHeadTexture(nowMs: number, playerInsideSubmitZone: boolean): void {
+  /**
+   * Safe Zone skin always uses the full “standing in the rainbow lane” look (not the dimmed idle state).
+   */
+  tickSafeZoneHeadTexture(nowMs: number): void {
     if (this.headVisual !== 'safezone' || !this.safeZoneCtx || !this.safeZoneTexture) return
-    drawSafeZoneCircleHeadTexture(this.safeZoneCtx, this.safeZoneTexSize, nowMs, playerInsideSubmitZone)
+    drawSafeZoneCircleHeadTexture(this.safeZoneCtx, this.safeZoneTexSize, nowMs, true)
     this.safeZoneTexture.needsUpdate = true
   }
 
