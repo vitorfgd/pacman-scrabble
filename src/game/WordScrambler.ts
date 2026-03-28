@@ -1,6 +1,5 @@
 import * as THREE from 'three'
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
-import { Letter, LETTER_TILE_DEPTH } from './entities/Letter'
+import { Letter } from './entities/Letter'
 import { isVowelLetter } from './LetterScoring'
 
 type Bounds = { minX: number; maxX: number; minY: number; maxY: number }
@@ -138,49 +137,78 @@ interface StarterAnim {
   phaseOffset: number
 }
 
+/**
+ * Ring lifebuoy (torus) in XY; letter is a flat panel on top (+Z) so it reads like the reference.
+ * Bottom of tube = −BUOY_LOCAL_HALF_HEIGHT at group origin.
+ */
+const LIFEGUARD_MAJOR = 0.52
+const LIFEGUARD_TUBE = 0.145
+export const BUOY_LOCAL_HALF_HEIGHT = LIFEGUARD_TUBE
+
 function createLetterTileMesh(): {
   root: THREE.Group
   topMaterial: THREE.MeshPhysicalMaterial
   sideMaterial: THREE.MeshStandardMaterial
 } {
-  const depth = LETTER_TILE_DEPTH
-  /** Chunky bevel + extra segments so edges read clearly in perspective. */
-  const geo = new RoundedBoxGeometry(1, 1, depth, 6, 0.11)
   const topMaterial = new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
-    roughness: 0.38,
+    roughness: 0.32,
     metalness: 0,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.32,
+    clearcoat: 0.45,
+    clearcoatRoughness: 0.28,
     transparent: true,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -0.5,
+    polygonOffsetUnits: -0.5,
   })
   const sideMaterial = new THREE.MeshStandardMaterial({
     color: 0x2a3d52,
     roughness: 0.48,
     metalness: 0,
   })
-  const bottomMaterial = new THREE.MeshStandardMaterial({
-    color: 0x040810,
-    roughness: 0.9,
-    metalness: 0,
-  })
-  const mesh = new THREE.Mesh(geo, [sideMaterial, sideMaterial, sideMaterial, sideMaterial, topMaterial, bottomMaterial])
-  mesh.renderOrder = 1
-  const root = new THREE.Group()
-  root.add(mesh)
 
-  /** Dark base plinth — gives a clear “block sitting on the deck” silhouette. */
-  const plinthD = 0.09
-  const plinthGeo = new RoundedBoxGeometry(1.16, 1.16, plinthD, 4, 0.07)
-  const plinthMat = new THREE.MeshStandardMaterial({
-    color: 0x0c141c,
-    roughness: 0.72,
-    metalness: 0,
+  /** Flat letter card facing the camera — sits above the ring (reference-style). */
+  const panelGeo = new THREE.PlaneGeometry(0.86, 0.86)
+  const mesh = new THREE.Mesh(panelGeo, topMaterial)
+  mesh.position.z = LIFEGUARD_TUBE + 0.035
+  mesh.renderOrder = 4
+  const root = new THREE.Group()
+
+  const matWhite = new THREE.MeshStandardMaterial({
+    color: 0xf2f4f8,
+    roughness: 0.34,
+    metalness: 0.06,
   })
-  const plinth = new THREE.Mesh(plinthGeo, plinthMat)
-  plinth.position.z = -depth / 2 - plinthD / 2
-  plinth.renderOrder = 0
-  root.add(plinth)
+  const matRed = new THREE.MeshStandardMaterial({
+    color: 0xe32620,
+    roughness: 0.36,
+    metalness: 0.06,
+  })
+  const arc = Math.PI / 2
+  const seg = 12
+  const tub = 32
+  for (let i = 0; i < 4; i++) {
+    const geo = new THREE.TorusGeometry(LIFEGUARD_MAJOR, LIFEGUARD_TUBE, seg, tub, arc)
+    const mat = i % 2 === 0 ? matWhite : matRed
+    const ringSeg = new THREE.Mesh(geo, mat)
+    ringSeg.rotation.z = i * arc
+    ringSeg.renderOrder = 0
+    root.add(ringSeg)
+  }
+
+  const ropeMat = new THREE.MeshStandardMaterial({
+    color: 0xeef0f5,
+    roughness: 0.55,
+    metalness: 0.02,
+  })
+  const ropeGeo = new THREE.TorusGeometry(LIFEGUARD_MAJOR + LIFEGUARD_TUBE * 0.95, 0.024, 8, 48)
+  const rope = new THREE.Mesh(ropeGeo, ropeMat)
+  rope.position.z = 0.028
+  rope.renderOrder = 1
+  root.add(rope)
+
+  root.add(mesh)
 
   return { root, topMaterial, sideMaterial }
 }
@@ -188,14 +216,14 @@ function createLetterTileMesh(): {
 /** Extra height for tail / body letters so tiles don’t z-fight the ocean. (World up = +Z.) */
 export const BODY_LETTER_Z_LIFT = 0.32
 
-/** World Z for tile center so the bottom face sits just above the arena floor. */
+/** World Z for root origin (tile center): buoy bottom sits on the deck. */
 export function letterAnchorZ(scale: number): number {
-  return (LETTER_TILE_DEPTH * scale) / 2 + 0.08
+  return BUOY_LOCAL_HALF_HEIGHT * scale + 0.08
 }
 
 /** When root scale is non-uniform (cargo compartments), use Z scale for foot height. */
 export function letterAnchorZFromRootScale(scale: THREE.Vector3): number {
-  return (LETTER_TILE_DEPTH * scale.z) / 2 + 0.08
+  return BUOY_LOCAL_HALF_HEIGHT * scale.z + 0.08
 }
 
 export class WordScrambler {
@@ -203,7 +231,7 @@ export class WordScrambler {
   private readonly bounds: Bounds
 
   private readonly letterRadius: number
-  private maxLetters = 1200
+  private maxLetters = 48
   private starterScale = 58
   private starterSpacing = 92
 
@@ -237,7 +265,7 @@ export class WordScrambler {
     this.bounds = options.bounds
     this.letterRadius = options.letterRadius ?? 26
     if (options.maxLetters != null) this.maxLetters = options.maxLetters
-    else this.maxLetters = 1200
+    else this.maxLetters = 48
     if (options.starterScale != null) this.starterScale = options.starterScale
     if (options.starterSpacing != null) this.starterSpacing = options.starterSpacing
     if (options.themeMode != null) this.themeMode = options.themeMode

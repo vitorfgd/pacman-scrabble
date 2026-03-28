@@ -127,7 +127,7 @@ export class Player {
     this.mesh.add(this.bowMesh)
     this.paintableMeshes.push(this.bowMesh)
 
-    this.initialSize = 28
+    this.initialSize = 30
     this.size = this.initialSize
     this.applyVisualScale()
     this.mesh.position.z = this.size + Player.groundClearance

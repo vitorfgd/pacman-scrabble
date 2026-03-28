@@ -2,11 +2,16 @@ import * as THREE from 'three'
 import { Player } from './entities/Player'
 import { Enemy } from './entities/Enemy'
 import { Fruit } from './entities/Fruit'
-import { WordScrambler, BODY_LETTER_Z_LIFT, letterAnchorZFromRootScale } from './WordScrambler'
+import {
+  WordScrambler,
+  BODY_LETTER_Z_LIFT,
+  letterAnchorZFromRootScale,
+  BUOY_LOCAL_HALF_HEIGHT,
+} from './WordScrambler'
 import { WordSource } from './WordSource'
 import { WordPartitioner } from './WordPartitioner'
 import { SnakeTrail } from './SnakeTrail'
-import { Letter, LETTER_TILE_DEPTH } from './entities/Letter'
+import { Letter } from './entities/Letter'
 import { CoinPickup } from './entities/CoinPickup'
 import { isVowelLetter } from './LetterScoring'
 import { AmbientBlobs } from './ambientBlobs'
@@ -248,7 +253,7 @@ export class Game {
 
   private running = false
   private lastMs = 0
-  private initialPlayerSize = 28
+  private initialPlayerSize = 30
   private cameraViewHeightWorld = 1500
   private readonly cameraFollowSpeed = 5.2
   private viewportProfile: ViewportProfile = this.computeViewportProfile()
@@ -674,7 +679,7 @@ export class Game {
     if (!portrait) {
       return {
         cameraViewHeightWorld: 1460,
-        playerSize: 28,
+        playerSize: 30,
         letterRadius: 54,
         starterScale: 58,
         starterSpacing: 92,
@@ -687,7 +692,7 @@ export class Game {
     }
     return {
       cameraViewHeightWorld: 1680,
-      playerSize: 34,
+      playerSize: 36,
       letterRadius: 70,
       starterScale: 72,
       starterSpacing: 104,
@@ -774,7 +779,7 @@ export class Game {
         scene: this.scene,
         bounds: this.playBounds(),
         letterRadius: this.viewportProfile.letterRadius,
-        maxLetters: 88,
+        maxLetters: 48,
         starterScale: this.viewportProfile.starterScale,
         starterSpacing: this.viewportProfile.starterSpacing,
         themeMode: 'dark',
@@ -1453,8 +1458,8 @@ export class Game {
         const ring = this.playerBodyRings[i]
         ring.visible = true
         const cz = letterAnchorZFromRootScale(root.scale) + BODY_LETTER_Z_LIFT
-        const halfTileZ = (LETTER_TILE_DEPTH * root.scale.z) / 2
-        const tileBottomZ = cz - halfTileZ
+        const halfBuoyZ = BUOY_LOCAL_HALF_HEIGHT * root.scale.z
+        const tileBottomZ = cz - halfBuoyZ
         /** Halo strictly under the tile: ocean < ring < letter. Use actual grid Z + margin to avoid z-fighting. */
         const groundZ = this.gridPlane.position.z
         const minZAboveGround = groundZ + 0.28

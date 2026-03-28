@@ -5,49 +5,50 @@ export type BlobBounds = { minX: number; maxX: number; minY: number; maxY: numbe
 export type BlobAvoidRect = { minX: number; maxX: number; minY: number; maxY: number }
 
 /**
- * Toxic bubbles: a low squashed “foam” plus a few small spheres — reads as chemical
- * blistering on the water, not a flat decal.
+ * Toxic pools: dark, reflective oil-slick read — low squashed body plus rim + micro highlights.
  */
 function createToxicBubbleGroup(
   hue: number,
   seed: number,
-): { group: THREE.Group; surfaceMat: THREE.MeshStandardMaterial; rimMat: THREE.MeshBasicMaterial } {
-  const baseHue = (0.2 + (hue + seed * 0.07) * 0.2) % 1
-  const body = new THREE.Color().setHSL(baseHue, 0.95, 0.32)
-  const glow = new THREE.Color().setHSL((baseHue + 0.05) % 1, 1, 0.5)
+): { group: THREE.Group; surfaceMat: THREE.MeshPhysicalMaterial; rimMat: THREE.MeshBasicMaterial } {
+  void hue
+  const body = new THREE.Color(0x030304).lerp(new THREE.Color(0x0a0a0c), seed * 0.55)
+  const glow = new THREE.Color(0x010102)
 
-  const surfaceMat = new THREE.MeshStandardMaterial({
+  const surfaceMat = new THREE.MeshPhysicalMaterial({
     color: body,
     emissive: glow,
-    emissiveIntensity: 1.75 + seed * 0.55,
-    metalness: 0.04,
-    roughness: 0.18,
+    emissiveIntensity: 0.05 + seed * 0.035,
+    metalness: 0.48,
+    roughness: 0.14,
+    clearcoat: 0.78,
+    clearcoatRoughness: 0.1,
     transparent: true,
-    opacity: 0.9 + seed * 0.06,
+    opacity: 0.9 + seed * 0.05,
     depthWrite: true,
     side: THREE.FrontSide,
     polygonOffset: true,
     polygonOffsetFactor: 1,
     polygonOffsetUnits: 1,
-    toneMapped: false,
+    toneMapped: true,
   })
 
   const rimMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color().setHSL((baseHue + 0.08) % 1, 1, 0.55),
-    transparent: true,
-    opacity: 0.5,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    toneMapped: false,
-  })
-
-  const blipMat = new THREE.MeshBasicMaterial({
-    color: new THREE.Color().setHSL((baseHue + 0.12) % 1, 0.9, 0.58),
+    color: 0x101014,
     transparent: true,
     opacity: 0.42,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
-    toneMapped: false,
+    toneMapped: true,
+  })
+
+  const blipMat = new THREE.MeshBasicMaterial({
+    color: 0x1c1c22,
+    transparent: true,
+    opacity: 0.38,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    toneMapped: true,
   })
 
   const flat = 0.34 + seed * 0.14
@@ -93,7 +94,7 @@ export class AmbientBlobs {
 
   readonly group = new THREE.Group()
   private readonly blobGroups: THREE.Group[] = []
-  private readonly surfaceMats: THREE.MeshStandardMaterial[] = []
+  private readonly surfaceMats: THREE.MeshPhysicalMaterial[] = []
   private readonly vx: number[] = []
   private readonly vy: number[] = []
   private readonly radii: number[] = []
@@ -256,8 +257,9 @@ export class AmbientBlobs {
 
       const mat = this.surfaceMats[i]
       const glug = 0.72 + 0.28 * Math.abs(Math.sin(t * 2.1 + ph))
-      mat.emissiveIntensity = (1.55 + (i % 3) * 0.28) * glug
-      mat.opacity = THREE.MathUtils.clamp(0.85 + 0.1 * glug, 0.75, 0.97)
+      mat.emissiveIntensity = (0.04 + (i % 3) * 0.015) * glug
+      mat.clearcoat = THREE.MathUtils.clamp(0.68 + 0.12 * glug, 0.62, 0.9)
+      mat.opacity = THREE.MathUtils.clamp(0.88 + 0.06 * glug, 0.8, 0.96)
     }
   }
 

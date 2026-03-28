@@ -76,20 +76,14 @@ function createMineGeometry(): {
     group.add(spike)
   }
 
-  return { group: group, coreMat, spikeMat, glowMat }
+  return { group, coreMat, spikeMat, glowMat }
 }
-
-/** Local sphere radius in `createMineGeometry` — used to place the mine on the water surface. */
-const MINE_SPHERE_LOCAL_R = 0.46
-/** World Z where the bottom of the sphere should sit (slightly above the ocean plane ~0). */
-const MINE_FLOAT_ABOVE_WATER = 0.05
 
 /**
  * Patrols between waypoints; when the player is within aggro range, locks onto a straight
  * dash toward them (bullet-like, no steering) for a few seconds, then returns to patrol.
  */
 export class Enemy {
-  /** Root group (position / scale / spin). Game uses this like a mesh. */
   readonly mesh: THREE.Group
 
   private readonly coreMat: THREE.MeshStandardMaterial
@@ -109,9 +103,7 @@ export class Enemy {
   private originalSpikeEmissive = new THREE.Color()
   private baseEmissiveIntensity = 3.35
 
-  /** Squared distance to player to trigger a straight-line dash. */
   private readonly aggroRangeSq = 520 * 520
-  /** How long the dash lasts before returning to patrol. */
   private readonly dashDurationMs = 2200
   private readonly dashSpeedMult = 6.2
   private dashActive = false
@@ -121,7 +113,6 @@ export class Enemy {
   private readonly steer = new THREE.Vector2(1, 0)
   private readonly patrolWaypoint = new THREE.Vector2(0, 0)
   private patrolBounds: Bounds | null = null
-  /** Expanded submit gate — enemies steer / spawn outside this box. */
   private gateAvoidRect: Bounds | null = null
 
   constructor() {
@@ -130,23 +121,14 @@ export class Enemy {
     this.spikeMat = mine.spikeMat
     this.glowMat = mine.glowMat
     this.mesh = mine.group
-    this.mesh.position.set(0, 0, MINE_FLOAT_ABOVE_WATER + MINE_SPHERE_LOCAL_R * 10)
+    this.mesh.position.set(0, 0, 1.14)
     this.mesh.visible = false
-  }
-
-  /** Center Z so the scaled sphere rests on the water + optional bob (reads “floating”). */
-  private waterFloatCenterZ(scale: number): number {
-    const bob =
-      Math.sin(this.pulseTimer * 2.05) * 0.32 +
-      Math.sin(this.pulseTimer * 2.9 + 0.8) * 0.14
-    return MINE_FLOAT_ABOVE_WATER + MINE_SPHERE_LOCAL_R * scale + bob
   }
 
   isActive(): boolean {
     return this.active
   }
 
-  /** True while executing a straight-line aggro dash toward the player. */
   isDashActive(): boolean {
     return this.dashActive
   }
@@ -163,10 +145,10 @@ export class Enemy {
       return
     }
 
-    const r = Math.max(24, baseRadius * 1.2)
+    const r = Math.max(16, baseRadius * 1.08)
     this.originalRadius = r
     this.mesh.scale.setScalar(r)
-    this.mesh.position.set(position.x, position.y, this.waterFloatCenterZ(r))
+    this.mesh.position.set(position.x, position.y, 1.14)
 
     this.slowUntilMs = 0
     this.pulseTimer = Math.random() * Math.PI * 2
@@ -190,7 +172,6 @@ export class Enemy {
     this.spikeMat.emissiveIntensity = 2.2
   }
 
-  /** Call after setActive when spawning; also sets first waypoint outside the gate zone. */
   setPatrolBounds(mapBounds: Bounds, gateAvoid: Bounds): void {
     this.patrolBounds = mapBounds
     this.gateAvoidRect = gateAvoid
@@ -201,7 +182,6 @@ export class Enemy {
     return x >= r.minX && x <= r.maxX && y >= r.minY && y <= r.maxY
   }
 
-  /** Shortest exit through nearest edge (radial from center often stays inside a rectangle). */
   private static nearestOutsidePoint(x: number, y: number, r: Bounds, clearance: number): { x: number; y: number } {
     if (!Enemy.pointInRect(x, y, r)) return { x, y }
     const dL = x - r.minX
@@ -232,7 +212,6 @@ export class Enemy {
     return t >= 0 && t <= 1 && u >= 0 && u <= 1
   }
 
-  /** Line segment vs axis-aligned rectangle (for path-through-gate checks). */
   private static segmentIntersectsRect(ax: number, ay: number, bx: number, by: number, r: Bounds): boolean {
     const { minX, maxX, minY, maxY } = r
     if (Enemy.pointInRect(ax, ay, r) || Enemy.pointInRect(bx, by, r)) return true
@@ -244,10 +223,6 @@ export class Enemy {
     )
   }
 
-  /**
-   * New waypoint: outside gate box, and straight line from `from` does not cut through the box
-   * (so we don’t “aim” through the no-go zone and fight the escape steering).
-   */
   private refreshPatrolWaypoint(): void {
     const b = this.patrolBounds
     const a = this.gateAvoidRect
@@ -397,7 +372,7 @@ export class Enemy {
     const r = this.getRadius()
     pos.x = THREE.MathUtils.clamp(pos.x, bounds.minX + r, bounds.maxX - r)
     pos.y = THREE.MathUtils.clamp(pos.y, bounds.minY + r, bounds.maxY - r)
-    pos.z = this.waterFloatCenterZ(r)
+    pos.z = 1.14
 
     const avoid = this.gateAvoidRect
     if (!this.dashActive && avoid && Enemy.pointInRect(pos.x, pos.y, avoid)) {
