@@ -1,8 +1,12 @@
 name: Deploy to GitHub Pages
 
+# Rebuilds every listed branch into one artifact: /pacman-scrabble/<branch>/.
+# Push to any of these branches (after merging this workflow) redeploys all versions together.
+
 on:
   push:
-    branches: [version3]
+    branches: [main, version2, version3, version4]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,17 +22,46 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
-      - run: npm run build
-      - name: Verify dist index is production-built
-        run: node -e "const fs=require('fs'); const s=fs.readFileSync('dist/index.html','utf8'); if(s.includes('/src/main.ts')){console.error('dist/index.html still references /src/main.ts (wrong deploy payload)'); process.exit(1)}"
+
+      - name: Stage root landing page
+        run: |
+          mkdir -p site
+          if [ -f pages-root/index.html ]; then
+            cp pages-root/index.html site/index.html
+          else
+            cat > site/index.html << 'EOF'
+          <!doctype html>
+          <html lang="en"><head><meta charset="UTF-8"/><title>PacMan Scrabble</title></head>
+          <body><h1>PacMan Scrabble</h1><p>Add <code>pages-root/index.html</code> on <code>main</code> for a nicer hub.</p></body></html>
+          EOF
+          fi
+
+      - name: Build each branch into site/<branch>/
+        run: |
+          set -euo pipefail
+          REPO_BASE="/pacman-scrabble"
+          for branch in main version2 version3 version4; do
+            echo "=== Building ${branch} ==="
+            git fetch origin "${branch}"
+            git checkout -f "${branch}"
+            npm ci
+            export VITE_BASE="${REPO_BASE}/${branch}/"
+            npm run build
+            node -e "const fs=require('fs'); const s=fs.readFileSync('dist/index.html','utf8'); if(s.includes('/src/main.ts')){console.error('dist/index.html still references /src/main.ts'); process.exit(1)}"
+            mkdir -p "site/${branch}"
+            cp -r dist/. "site/${branch}/"
+          done
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/
+          path: site/
 
   deploy:
     needs: build
